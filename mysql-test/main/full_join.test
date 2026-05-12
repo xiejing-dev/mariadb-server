@@ -1898,6 +1898,183 @@ union
 select * from t1 right join t2 on t1.a = t2.b;
 drop table t1, t2;
 
+--echo # simplify_joins must not rewrite a FULL JOIN whose left side
+--echo # still contains an unrewritten FULL JOIN.  Without the fix,
+--echo # rewrite_full_to_right put the inner FULL JOIN on the inner
+--echo # side of the resulting LEFT JOIN, a shape the optimizer could
+--echo # not plan, and tripped the found_tables > 0 assertion in
+--echo # best_extension_by_limited_search.
+--echo #
+--echo # The trigger is a WHERE predicate that rejects nulls on the
+--echo # right base table of the outermost FULL JOIN in a chained FULL
+--echo # JOIN.  The fix keeps the FULL JOIN; the null complement pass
+--echo # runs and the WHERE filters any rows the rewrite would have
+--echo # eliminated.  Per Section 6, the LEFT JOIN UNION RIGHT JOIN
+--echo # oracle is not valid for chained FULL JOINs, so the recorded
+--echo # result is the oracle.
+create table t1 (a int);
+create table t2 (a int);
+create table t3 (a int);
+create table t4 (a int);
+insert into t1 values (1);
+insert into t2 values (10);
+insert into t3 values (100);
+insert into t4 values (1000), (2000);
+--sorted_result
+select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a <= 3000;
+explain extended select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a <= 3000;
+--echo # IS NOT NULL drives the same rewrite path.
+--sorted_result
+select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a is not null;
+explain extended select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a is not null;
+--echo # RIGHT JOIN canonicalizes to LEFT JOIN, same trigger applies.
+--sorted_result
+select t1.a, t2.a, t3.a, t4.a
+from t1 right join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a <= 3000;
+explain extended select t1.a, t2.a, t3.a, t4.a
+from t1 right join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a <= 3000;
+--echo # Reproducer matching the original ticket.  All left tables are
+--echo # empty so only null complement rows for t4 reach the WHERE,
+--echo # and GROUP BY collapses them.
+delete from t1;
+delete from t2;
+delete from t3;
+--sorted_result
+select t1.a as field1
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a <= 3000
+group by field1;
+explain extended select t1.a as field1
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t4.a <= 3000
+group by field1;
+--echo # The guard must not block the normal FULL JOIN rewrite when
+--echo # the left side is a base table.  A plain t1 FULL JOIN t4 with
+--echo # the same WHERE predicate still rewrites and the UNION oracle
+--echo # matches.
+insert into t1 values (1);
+--sorted_result
+select t1.a, t4.a from t1 full join t4 on (true) where t4.a <= 3000;
+explain extended
+select t1.a, t4.a from t1 full join t4 on (true) where t4.a <= 3000;
+--sorted_result
+select t1.a, t4.a from t1 left join t4 on (true) where t4.a <= 3000
+union
+select t1.a, t4.a from t1 right join t4 on (true) where t4.a <= 3000;
+explain extended
+select t1.a, t4.a from t1 left join t4 on (true) where t4.a <= 3000
+union
+select t1.a, t4.a from t1 right join t4 on (true) where t4.a <= 3000;
+drop table t1, t2, t3, t4;
+
+--echo # Taller-tree variant of the chained FULL JOIN regression above.
+--echo # The guard at each level of rewrite_full_outer_joins runs after
+--echo # simplify_nested_join has descended into left_table, so a longer
+--echo # chain is handled recursively: each FULL JOIN whose left side
+--echo # still contains an unrewritten FULL JOIN stays as a FULL JOIN.
+--echo # With the null-rejecting WHERE only on the outermost right, no
+--echo # inner FULL JOIN can rewrite, so every FULL JOIN in the chain
+--echo # is preserved.
+create table t1 (a int);
+create table t2 (a int);
+create table t3 (a int);
+create table t4 (a int);
+create table t5 (a int);
+create table t6 (a int);
+insert into t1 values (1);
+insert into t2 values (10);
+insert into t3 values (100);
+insert into t4 values (1000);
+insert into t5 values (10000);
+insert into t6 values (100000), (200000);
+--sorted_result
+select t1.a, t2.a, t3.a, t4.a, t5.a, t6.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+        full join t5 on (true)
+        full join t6 on (true)
+where t6.a <= 300000;
+explain extended select t1.a, t2.a, t3.a, t4.a, t5.a, t6.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+        full join t5 on (true)
+        full join t6 on (true)
+where t6.a <= 300000;
+drop table t1, t2, t3, t4, t5, t6;
+
+--echo # Companion case: the guard must not fire pessimistically.  When
+--echo # a null-rejecting WHERE predicate sits on a middle base table
+--echo # rather than the outermost right, the inner FULL JOIN rewrites
+--echo # (its left side is a base-table-only LEFT JOIN, not yet
+--echo # containing a FULL JOIN), and the outer FULL JOIN's left side
+--echo # no longer contains a FULL JOIN by the time the guard checks
+--echo # it, so the outer FULL JOIN also rewrites.  Both FULL JOINs
+--echo # collapse to LEFT JOINs and the query is plannable without the
+--echo # null complement pass.
+--echo #
+--echo # Note: t3 is detected as a system const table in the recorded
+--echo # plan.  MDEV-38508 (commit 7d6a036c3a1) skips constant table
+--echo # promotion for tables whose outer_join carries JOIN_TYPE_FULL,
+--echo # but that guard reads the current outer_join bits and
+--echo # simplify_joins clears JOIN_TYPE_FULL when it rewrites a FULL
+--echo # JOIN to a LEFT JOIN.  Here both FULL JOINs are rewritten
+--echo # before make_join_statistics runs, so t3 is no longer an FJ
+--echo # partner at that point and the standard LEFT JOIN const-table
+--echo # path applies.  This is safe: the FULL JOIN's null complement
+--echo # pass is what made const promotion dangerous in MDEV-38508, and
+--echo # there is no null complement pass after the rewrite; any
+--echo # predicate that drove the rewrite is null-rejecting on the
+--echo # rewritten table and so rejects the synthesized NULL row anyway.
+create table t1 (a int);
+create table t2 (a int);
+create table t3 (a int);
+create table t4 (a int);
+insert into t1 values (1);
+insert into t2 values (10);
+insert into t3 values (100);
+insert into t4 values (1000);
+--sorted_result
+select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t3.a <= 1000;
+--echo # Verify the simplified shape: a plain LEFT JOIN chain, no FULL.
+explain extended select t1.a
+from t1 left join t2 on (true)
+        full join t3 on (true)
+        full join t4 on (true)
+where t3.a <= 1000;
+drop table t1, t2, t3, t4;
+
 --echo # ====================================================================
 --echo # Section 19: Right side of FULL JOIN must be a base table
 --echo # ====================================================================

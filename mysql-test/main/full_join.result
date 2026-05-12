@@ -2999,6 +2999,251 @@ a	b
 1	NULL
 NULL	2
 drop table t1, t2;
+# simplify_joins must not rewrite a FULL JOIN whose left side
+# still contains an unrewritten FULL JOIN.  Without the fix,
+# rewrite_full_to_right put the inner FULL JOIN on the inner
+# side of the resulting LEFT JOIN, a shape the optimizer could
+# not plan, and tripped the found_tables > 0 assertion in
+# best_extension_by_limited_search.
+#
+# The trigger is a WHERE predicate that rejects nulls on the
+# right base table of the outermost FULL JOIN in a chained FULL
+# JOIN.  The fix keeps the FULL JOIN; the null complement pass
+# runs and the WHERE filters any rows the rewrite would have
+# eliminated.  Per Section 6, the LEFT JOIN UNION RIGHT JOIN
+# oracle is not valid for chained FULL JOINs, so the recorded
+# result is the oracle.
+create table t1 (a int);
+create table t2 (a int);
+create table t3 (a int);
+create table t4 (a int);
+insert into t1 values (1);
+insert into t2 values (10);
+insert into t3 values (100);
+insert into t4 values (1000), (2000);
+select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a <= 3000;
+a	a	a	a
+1	10	100	1000
+1	10	100	2000
+explain extended select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a <= 3000;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	1	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a`,`test`.`t3`.`a` AS `a`,`test`.`t4`.`a` AS `a` from ((`test`.`t1` left join `test`.`t2` on(1)) full join `test`.`t3` on(1)) full join `test`.`t4` on(1) where `test`.`t4`.`a` <= 3000
+# IS NOT NULL drives the same rewrite path.
+select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a is not null;
+a	a	a	a
+1	10	100	1000
+1	10	100	2000
+explain extended select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a is not null;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	1	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a`,`test`.`t3`.`a` AS `a`,`test`.`t4`.`a` AS `a` from ((`test`.`t1` left join `test`.`t2` on(1)) full join `test`.`t3` on(1)) full join `test`.`t4` on(1) where `test`.`t4`.`a` is not null
+# RIGHT JOIN canonicalizes to LEFT JOIN, same trigger applies.
+select t1.a, t2.a, t3.a, t4.a
+from t1 right join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a <= 3000;
+a	a	a	a
+1	10	100	1000
+1	10	100	2000
+explain extended select t1.a, t2.a, t3.a, t4.a
+from t1 right join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a <= 3000;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	1	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a`,`test`.`t3`.`a` AS `a`,`test`.`t4`.`a` AS `a` from ((`test`.`t2` left join `test`.`t1` on(1)) full join `test`.`t3` on(1)) full join `test`.`t4` on(1) where `test`.`t4`.`a` <= 3000
+# Reproducer matching the original ticket.  All left tables are
+# empty so only null complement rows for t4 reach the WHERE,
+# and GROUP BY collapses them.
+delete from t1;
+delete from t2;
+delete from t3;
+select t1.a as field1
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a <= 3000
+group by field1;
+field1
+NULL
+explain extended select t1.a as field1
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t4.a <= 3000
+group by field1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	0	0.00	Using temporary; Using filesort
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	0	0.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `field1` from ((`test`.`t1` left join `test`.`t2` on(1)) full join `test`.`t3` on(1)) full join `test`.`t4` on(1) where `test`.`t4`.`a` <= 3000 group by `test`.`t1`.`a`
+# The guard must not block the normal FULL JOIN rewrite when
+# the left side is a base table.  A plain t1 FULL JOIN t4 with
+# the same WHERE predicate still rewrites and the UNION oracle
+# matches.
+insert into t1 values (1);
+select t1.a, t4.a from t1 full join t4 on (true) where t4.a <= 3000;
+a	a
+1	1000
+1	2000
+explain extended
+select t1.a, t4.a from t1 full join t4 on (true) where t4.a <= 3000;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t4`.`a` AS `a` from `test`.`t4` left join `test`.`t1` on(1) where `test`.`t4`.`a` <= 3000
+select t1.a, t4.a from t1 left join t4 on (true) where t4.a <= 3000
+union
+select t1.a, t4.a from t1 right join t4 on (true) where t4.a <= 3000;
+a	a
+1	1000
+1	2000
+explain extended
+select t1.a, t4.a from t1 left join t4 on (true) where t4.a <= 3000
+union
+select t1.a, t4.a from t1 right join t4 on (true) where t4.a <= 3000;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	system	NULL	NULL	NULL	NULL	1	100.00	
+1	PRIMARY	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+2	UNION	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+2	UNION	t1	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (flat, BNL join)
+NULL	UNION RESULT	<union1,2>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
+Warnings:
+Note	1003	/* select#1 */ select 1 AS `a`,`test`.`t4`.`a` AS `a` from `test`.`t4` where `test`.`t4`.`a` <= 3000 union /* select#2 */ select `test`.`t1`.`a` AS `a`,`test`.`t4`.`a` AS `a` from `test`.`t4` left join `test`.`t1` on(1) where `test`.`t4`.`a` <= 3000
+drop table t1, t2, t3, t4;
+# Taller-tree variant of the chained FULL JOIN regression above.
+# The guard at each level of rewrite_full_outer_joins runs after
+# simplify_nested_join has descended into left_table, so a longer
+# chain is handled recursively: each FULL JOIN whose left side
+# still contains an unrewritten FULL JOIN stays as a FULL JOIN.
+# With the null-rejecting WHERE only on the outermost right, no
+# inner FULL JOIN can rewrite, so every FULL JOIN in the chain
+# is preserved.
+create table t1 (a int);
+create table t2 (a int);
+create table t3 (a int);
+create table t4 (a int);
+create table t5 (a int);
+create table t6 (a int);
+insert into t1 values (1);
+insert into t2 values (10);
+insert into t3 values (100);
+insert into t4 values (1000);
+insert into t5 values (10000);
+insert into t6 values (100000), (200000);
+select t1.a, t2.a, t3.a, t4.a, t5.a, t6.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+full join t5 on (true)
+full join t6 on (true)
+where t6.a <= 300000;
+a	a	a	a	a	a
+1	10	100	1000	10000	100000
+1	10	100	1000	10000	200000
+explain extended select t1.a, t2.a, t3.a, t4.a, t5.a, t6.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+full join t5 on (true)
+full join t6 on (true)
+where t6.a <= 300000;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	1	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t5	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t6	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`a` AS `a`,`test`.`t3`.`a` AS `a`,`test`.`t4`.`a` AS `a`,`test`.`t5`.`a` AS `a`,`test`.`t6`.`a` AS `a` from ((((`test`.`t1` left join `test`.`t2` on(1)) full join `test`.`t3` on(1)) full join `test`.`t4` on(1)) full join `test`.`t5` on(1)) full join `test`.`t6` on(1) where `test`.`t6`.`a` <= 300000
+drop table t1, t2, t3, t4, t5, t6;
+# Companion case: the guard must not fire pessimistically.  When
+# a null-rejecting WHERE predicate sits on a middle base table
+# rather than the outermost right, the inner FULL JOIN rewrites
+# (its left side is a base-table-only LEFT JOIN, not yet
+# containing a FULL JOIN), and the outer FULL JOIN's left side
+# no longer contains a FULL JOIN by the time the guard checks
+# it, so the outer FULL JOIN also rewrites.  Both FULL JOINs
+# collapse to LEFT JOINs and the query is plannable without the
+# null complement pass.
+#
+# Note: t3 is detected as a system const table in the recorded
+# plan.  MDEV-38508 (commit 7d6a036c3a1) skips constant table
+# promotion for tables whose outer_join carries JOIN_TYPE_FULL,
+# but that guard reads the current outer_join bits and
+# simplify_joins clears JOIN_TYPE_FULL when it rewrites a FULL
+# JOIN to a LEFT JOIN.  Here both FULL JOINs are rewritten
+# before make_join_statistics runs, so t3 is no longer an FJ
+# partner at that point and the standard LEFT JOIN const-table
+# path applies.  This is safe: the FULL JOIN's null complement
+# pass is what made const promotion dangerous in MDEV-38508, and
+# there is no null complement pass after the rewrite; any
+# predicate that drove the rewrite is null-rejecting on the
+# rewritten table and so rejects the synthesized NULL row anyway.
+create table t1 (a int);
+create table t2 (a int);
+create table t3 (a int);
+create table t4 (a int);
+insert into t1 values (1);
+insert into t2 values (10);
+insert into t3 values (100);
+insert into t4 values (1000);
+select t1.a, t2.a, t3.a, t4.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t3.a <= 1000;
+a	a	a	a
+1	10	100	1000
+# Verify the simplified shape: a plain LEFT JOIN chain, no FULL.
+explain extended select t1.a
+from t1 left join t2 on (true)
+full join t3 on (true)
+full join t4 on (true)
+where t3.a <= 1000;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	system	NULL	NULL	NULL	NULL	1	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	1	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `a` from (`test`.`t1` left join `test`.`t2` on(1)) left join `test`.`t4` on(1) where 1
+drop table t1, t2, t3, t4;
 # ====================================================================
 # Section 19: Right side of FULL JOIN must be a base table
 # ====================================================================
