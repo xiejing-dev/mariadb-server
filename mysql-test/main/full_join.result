@@ -3279,6 +3279,31 @@ a	a
 2	2
 2	2
 drop table t1;
+# When a constant table is a subquery, the duplicate filter
+# allocation loop used to walk off the end of JOIN::join_tab list.
+create table t1 (pk int not null, primary key (pk));
+create table t2 (pk int);
+select t1.pk from (t1 full join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)));
+pk
+insert into t1 values (1), (2);
+insert into t2 values (1), (null);
+select t1.pk from (t1 full join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)));
+pk
+1
+1
+2
+2
+select t1.pk from (t1 left join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)))
+union
+select t1.pk from (t1 right join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)));
+pk
+1
+2
+drop table t1, t2;
 # ====================================================================
 # Section 19: Right side of FULL JOIN must be a base table
 # ====================================================================

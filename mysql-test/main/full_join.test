@@ -2095,6 +2095,25 @@ select * from t1, (select alias1.a from t1 as alias1
                                    where alias1.a is null) dt;
 drop table t1;
 
+--echo # When a constant table is a subquery, the duplicate filter
+--echo # allocation loop used to walk off the end of JOIN::join_tab list.
+create table t1 (pk int not null, primary key (pk));
+create table t2 (pk int);
+select t1.pk from (t1 full join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)));
+insert into t1 values (1), (2);
+insert into t2 values (1), (null);
+--sorted_result
+select t1.pk from (t1 full join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)));
+--sorted_result
+select t1.pk from (t1 left join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)))
+union
+select t1.pk from (t1 right join t2 on (true))
+where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)));
+drop table t1, t2;
+
 --echo # ====================================================================
 --echo # Section 19: Right side of FULL JOIN must be a base table
 --echo # ====================================================================

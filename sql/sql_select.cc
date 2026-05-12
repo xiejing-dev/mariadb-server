@@ -24921,12 +24921,12 @@ Next_select_func setup_end_select_func(JOIN *join)
   Returns true on allocation failure (error already reported).
 */
 
-static bool alloc_full_join_duplicate_filters(JOIN *join, JOIN_TAB *start_tab,
-                                              uint count)
+static bool alloc_full_join_duplicate_filters(JOIN *join, uint count)
 {
   if (!join->thd->lex->full_join_count)
     return false;
 
+  JOIN_TAB* start_tab= join->join_tab;
   for (uint i= 0; i < count; ++i)
   {
     start_tab[i].fj_dups= nullptr;
@@ -24952,12 +24952,12 @@ static bool alloc_full_join_duplicate_filters(JOIN *join, JOIN_TAB *start_tab,
   allocated by alloc_full_join_duplicate_filters.
 */
 
-static void free_full_join_duplicate_filters(JOIN *join, JOIN_TAB *start_tab,
-                                              uint count)
+static void free_full_join_duplicate_filters(JOIN *join, uint count)
 {
   if (!join->thd->lex->full_join_count)
     return;
 
+  JOIN_TAB* start_tab= join->join_tab;
   for (uint i= 0; i < count; ++i)
   {
     if (!(start_tab[i].tab_list->outer_join & JOIN_TYPE_FULL) ||
@@ -25098,7 +25098,7 @@ do_select(JOIN *join, Procedure *procedure)
     JOIN_TAB *start_tab= join->join_tab +
                         (join->tables_list ? join->const_tables : 0);
 
-    if (alloc_full_join_duplicate_filters(join, start_tab, top_level_tables))
+    if (alloc_full_join_duplicate_filters(join, top_level_tables))
       DBUG_RETURN(-1);
 
     if (join->outer_ref_cond && !join->outer_ref_cond->val_bool())
@@ -25108,7 +25108,7 @@ do_select(JOIN *join, Procedure *procedure)
     if (error >= NESTED_LOOP_OK && likely(join->thd->killed != ABORT_QUERY))
       error= join->first_select(join,start_tab,1);
 
-    free_full_join_duplicate_filters(join, start_tab, top_level_tables);
+    free_full_join_duplicate_filters(join, top_level_tables);
   }
 
   join->thd->limit_found_rows= join->send_records - join->duplicate_rows;
