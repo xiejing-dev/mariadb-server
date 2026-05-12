@@ -2928,6 +2928,77 @@ c	a	b
 Warnings:
 Warning	4219	Hint JOIN_ORDER(`t1`,`t3`,`t2`) is ignored as conflicting/duplicated
 drop table t1, t2, t3;
+# Empty MyISAM FULL JOIN partner.  MyISAM reports an exact 0 row
+# count, so the table used to be promoted to a JT_SYSTEM const
+# NULL row at optimize time.  The synthesized NULL row drove the
+# LEFT JOIN component to emit a bogus row of NULLs when the
+# other partner was also empty.  Earlier still, the duplicate
+# filter setup crashed in this scenario.  FULL JOIN tables
+# bypass the const table optimization.
+create table t1 (pk int) ENGINE=MyISAM;
+create table t2 (pk int) ENGINE=InnoDB;
+select t1.pk from t1 full join t2 on (true);
+pk
+select t1.pk from t1 left join t2 on (true)
+union
+select t1.pk from t1 right join t2 on (true);
+pk
+drop table t1, t2;
+# Both partners empty MyISAM.
+create table t1 (pk int) ENGINE=MyISAM;
+create table t2 (pk int) ENGINE=MyISAM;
+select * from t1 full join t2 on (true);
+pk	pk
+select * from t1 left join t2 on (true)
+union
+select * from t1 right join t2 on (true);
+pk	pk
+drop table t1, t2;
+# Empty MyISAM on the left, InnoDB on the right with rows.  The
+# bug was masked here because the phantom left NULL row happened
+# to produce the same rows the null complement pass would.
+create table t1 (pk int) ENGINE=MyISAM;
+create table t2 (pk int) ENGINE=InnoDB;
+insert into t2 values (10), (20);
+select * from t1 full join t2 on (true);
+pk	pk
+NULL	10
+NULL	20
+select * from t1 left join t2 on (true)
+union
+select * from t1 right join t2 on (true);
+pk	pk
+NULL	10
+NULL	20
+drop table t1, t2;
+# Empty MyISAM on the right (the side that does not normally
+# become const) and empty InnoDB on the left.
+create table t1 (pk int) ENGINE=InnoDB;
+create table t2 (pk int) ENGINE=MyISAM;
+select * from t1 full join t2 on (true);
+pk	pk
+select * from t1 left join t2 on (true)
+union
+select * from t1 right join t2 on (true);
+pk	pk
+drop table t1, t2;
+# MyISAM partners with one row each.  Without the guards, the
+# stats.records <= 1 path would also have promoted them.
+create table t1 (a int) ENGINE=MyISAM;
+create table t2 (b int) ENGINE=MyISAM;
+insert into t1 values (1);
+insert into t2 values (2);
+select * from t1 full join t2 on t1.a = t2.b;
+a	b
+1	NULL
+NULL	2
+select * from t1 left join t2 on t1.a = t2.b
+union
+select * from t1 right join t2 on t1.a = t2.b;
+a	b
+1	NULL
+NULL	2
+drop table t1, t2;
 # ====================================================================
 # Section 19: Right side of FULL JOIN must be a base table
 # ====================================================================
