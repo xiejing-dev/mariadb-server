@@ -1219,13 +1219,6 @@ public:
   enum_nested_loop_state put_record() { return put_record(false); };
 
   /*
-    Flush the last pending group to the temp table without reading or
-    sending accumulated rows.  Used when a FULL JOIN null-complement
-    pass is still pending and we need to keep accumulating rows.
-  */
-  enum_nested_loop_state flush_record() { return put_record(true); };
-
-  /*
     Send the result of operation further (to a next operation/client)
     This function is called after all records were put into tmp table.
 
