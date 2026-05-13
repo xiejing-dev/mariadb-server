@@ -42,6 +42,8 @@ void mtr_t::commit() {}
 void mtr_t::rollback_to_savepoint(ulint, ulint) {}
 void small_vector_base::grow_by_1(void *, size_t) noexcept {}
 void buf_inc_get(trx_t*) noexcept {}
+THD *_current_thd() { return nullptr; }
+trx_t *thd_to_trx(const THD*) noexcept { return nullptr; }
 
 void sql_print_error(const char*, ...) {}
 ulint ut_find_prime(ulint n) { return n; }

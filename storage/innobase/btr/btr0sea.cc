@@ -82,6 +82,36 @@ inline ahi_node **btr_sea::hash_chain::search(UnaryPred u) noexcept
   return prev;
 }
 
+void btr_ahi_inc_searches(trx_t *trx) noexcept
+{
+  if (ha_handler_stats *stats= trx->active_handler_stats)
+    stats->ahi_searches++;
+}
+
+void btr_ahi_inc_searches_btree(trx_t *trx) noexcept
+{
+  if (ha_handler_stats *stats= trx->active_handler_stats)
+    stats->ahi_searches_btree++;
+}
+
+static void btr_ahi_inc_rows_added(ulonglong count= 1) noexcept
+{
+  MONITOR_INC_VALUE(MONITOR_ADAPTIVE_HASH_ROW_ADDED, count);
+  if (THD *thd= current_thd)
+    if (trx_t *trx= thd_to_trx(thd))
+      if (ha_handler_stats *stats= trx->active_handler_stats)
+        stats->ahi_rows_added+= count;
+}
+
+static void btr_ahi_inc_pages_added() noexcept
+{
+  MONITOR_INC(MONITOR_ADAPTIVE_HASH_PAGE_ADDED);
+  if (THD *thd= current_thd)
+    if (trx_t *trx= thd_to_trx(thd))
+      if (ha_handler_stats *stats= trx->active_handler_stats)
+        stats->ahi_pages_added++;
+}
+
 inline void btr_sea::partition::init() noexcept
 {
   latch.SRW_LOCK_INIT(btr_search_latch_key);
@@ -625,7 +655,7 @@ static void btr_search_update_hash_ref(const btr_cur_t &cursor,
     }
 
     part.insert(fold, rec, block);
-    MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+    btr_ahi_inc_rows_added();
   }
   else
   {
@@ -1676,7 +1706,7 @@ static void btr_search_build_page_hash_index(dict_index_t *index,
   part.latch.wr_rd_downgrade(SRW_LOCK_CALL);
 # endif
 
-  MONITOR_INC_VALUE(MONITOR_ADAPTIVE_HASH_ROW_ADDED, n_cached);
+  btr_ahi_inc_rows_added(n_cached);
 
   for (size_t i= 0; i < n_cached; i++)
   {
@@ -1711,7 +1741,7 @@ static void btr_search_build_page_hash_index(dict_index_t *index,
     goto next_redundant;
   }
 
-  MONITOR_INC(MONITOR_ADAPTIVE_HASH_PAGE_ADDED);
+  btr_ahi_inc_pages_added();
   assert_block_ahi_valid(block);
   part.latch.rd_unlock();
 }
@@ -1964,7 +1994,7 @@ void btr_search_update_hash_on_insert(btr_cur_t *cursor, bool reorg) noexcept
         goto unlock_exit;
       }
       part.insert(ins_fold, ins_rec, block);
-      MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+      btr_ahi_inc_rows_added();
     }
   }
   else if (fold != ins_fold)
@@ -1979,7 +2009,7 @@ void btr_search_update_hash_on_insert(btr_cur_t *cursor, bool reorg) noexcept
     if (left_bytes_fields & buf_block_t::LEFT_SIDE)
       fold= ins_fold, rec= ins_rec;
     part.insert(fold, rec, block);
-    MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+    btr_ahi_inc_rows_added();
   }
 
   if (next_is_supremum)
@@ -1994,7 +2024,7 @@ void btr_search_update_hash_on_insert(btr_cur_t *cursor, bool reorg) noexcept
           goto rollback;
       }
       part.insert(ins_fold, ins_rec, block);
-      MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+      btr_ahi_inc_rows_added();
     }
   }
   else if (ins_fold != next_fold)
@@ -2009,7 +2039,7 @@ void btr_search_update_hash_on_insert(btr_cur_t *cursor, bool reorg) noexcept
     if (!(left_bytes_fields & ~buf_block_t::LEFT_SIDE))
       next_fold= ins_fold, next_rec= ins_rec;
     part.insert(next_fold, next_rec, block);
-    MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+    btr_ahi_inc_rows_added();
   }
 
   ut_ad(!locked || index == block->index);
