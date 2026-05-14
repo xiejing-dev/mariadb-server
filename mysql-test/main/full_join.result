@@ -3244,6 +3244,41 @@ id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
 Warnings:
 Note	1003	select `test`.`t1`.`a` AS `a` from (`test`.`t1` left join `test`.`t2` on(1)) left join `test`.`t4` on(1) where 1
 drop table t1, t2, t3, t4;
+# MDEV-39605: a merged derived table containing a FULL JOIN previously
+# hit an assertion in table elimination.  simplify_joins
+# preserves the derived's nested join (no on_expr, not a semi-join)
+# to keep the FULL JOIN tables adjacent in the parent join_list, but
+# the table elimination iterator must descend into that nest
+# without trying to eliminate it.
+create table t1 (a int);
+insert into t1 values (1), (2);
+select * from t1, (select alias1.a from t1 as alias1
+full join t1 as alias2 on (true)) dt;
+a	a
+1	1
+1	1
+1	2
+1	2
+2	1
+2	1
+2	2
+2	2
+select * from t1, (select alias1.a from t1 as alias1
+left join t1 as alias2 on (true)
+union all
+select alias1.a from t1 as alias1
+right join t1 as alias2 on (true)
+where alias1.a is null) dt;
+a	a
+1	1
+1	1
+1	2
+1	2
+2	1
+2	1
+2	2
+2	2
+drop table t1;
 # ====================================================================
 # Section 19: Right side of FULL JOIN must be a base table
 # ====================================================================

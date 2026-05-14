@@ -2075,6 +2075,26 @@ from t1 left join t2 on (true)
 where t3.a <= 1000;
 drop table t1, t2, t3, t4;
 
+--echo # MDEV-39605: a merged derived table containing a FULL JOIN previously
+--echo # hit an assertion in table elimination.  simplify_joins
+--echo # preserves the derived's nested join (no on_expr, not a semi-join)
+--echo # to keep the FULL JOIN tables adjacent in the parent join_list, but
+--echo # the table elimination iterator must descend into that nest
+--echo # without trying to eliminate it.
+create table t1 (a int);
+insert into t1 values (1), (2);
+--sorted_result
+select * from t1, (select alias1.a from t1 as alias1
+                                   full join t1 as alias2 on (true)) dt;
+--sorted_result
+select * from t1, (select alias1.a from t1 as alias1
+                                   left join t1 as alias2 on (true)
+                   union all
+                   select alias1.a from t1 as alias1
+                                   right join t1 as alias2 on (true)
+                                   where alias1.a is null) dt;
+drop table t1;
+
 --echo # ====================================================================
 --echo # Section 19: Right side of FULL JOIN must be a base table
 --echo # ====================================================================
