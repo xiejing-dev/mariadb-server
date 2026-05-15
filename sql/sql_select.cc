@@ -24935,11 +24935,13 @@ static bool alloc_full_join_duplicate_filters(JOIN *join, uint count)
         !(start_tab[i].tab_list->outer_join & JOIN_TYPE_RIGHT))
       continue;
 
+    /*
+      If we're allocating a filter, then it's for a FULL JOIN and there
+      must be at least two tables in the JOIN.
+    */
     DBUG_ASSERT(count >= 2);
-    auto fj_dups= join->thd->alloc<full_join_duplicate_filter>(1);
-    if (!fj_dups)
-      return true;
-    if (fj_dups->init(join->thd, &start_tab[i]))
+    full_join_duplicate_filter *fj_dups= new full_join_duplicate_filter;
+    if (!fj_dups || fj_dups->init(join->thd, &start_tab[i]))
       return true;
     start_tab[i].fj_dups= fj_dups;
   }
@@ -27119,7 +27121,8 @@ end_send(JOIN *join, JOIN_TAB *join_tab, bool end_of_records)
     to get fields from previous tab.
   */
   DBUG_ASSERT(join_tab == NULL || join_tab != join->join_tab);
-  List<Item> *fields= join->fields;
+  //TODO pass fields via argument
+  List<Item> *fields= join_tab ? (join_tab-1)->fields : join->fields;
 
   if (end_of_records)
   {
