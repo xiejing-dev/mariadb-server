@@ -25525,8 +25525,12 @@ run_fj_null_complement_pass(JOIN *join, JOIN_TAB *join_tab)
   Item *saved_on_precond= join_tab->on_precond;
   join_tab->on_precond= nullptr;
 
-  // Restart reading from the right table as a full scan.
-  join_tab->table->file->ha_end_keyread();
+  /*
+    Restart reading from the right table as a full scan.  The keyread
+    state must be saved and restored because a correlated subquery
+    will expect the keyread to be active during a later read.
+  */
+  const int saved_keyread= join_tab->table->file->ha_end_active_keyread();
   if (join_tab->type == JT_FT)
     join_tab->table->file->ha_ft_end();
   else if (join_tab->table->hlindex &&
@@ -25554,6 +25558,17 @@ run_fj_null_complement_pass(JOIN *join, JOIN_TAB *join_tab)
   join_tab->writing_null_complements= false;
   join_tab->fj_null_complement_done= true;
   join_tab->on_precond= saved_on_precond;
+  /*
+    join_init_read_record (via join_tab->read_first_record above)
+    started an RND scan and we must end it before restoring the keyread
+    state that we saved near the start of this function.
+
+    TODO: probably this should be a scope_exit in case we ever have to
+    return early, before getting to this point.
+  */
+  if (join_tab->table->file->inited)
+    join_tab->table->file->ha_index_or_rnd_end();
+  join_tab->table->file->ha_restart_keyread(saved_keyread);
 
   if (nls == NESTED_LOOP_NO_MORE_ROWS)
     nls= NESTED_LOOP_OK;

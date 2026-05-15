@@ -2114,6 +2114,32 @@ select t1.pk from (t1 right join t2 on (true))
 where exists (select t2.pk from (t1 right join t2 on (t2.pk = t1.pk)));
 drop table t1, t2;
 
+--echo # In a correlated subquery, the FULL JOIN null complement rescan
+--echo # on the right table used to disable the keyread on the
+--echo # index without re-enabling it.  The next iteration of the
+--echo # subquery then hit an assertion because the keyread
+--echo # was expected to still be active.
+create table t1 (pk int primary key);
+create table t2 (pk int primary key, a int);
+create table t3 (pk int primary key, a int, key idx(a));
+insert into t1 values (1), (2);
+insert into t2 values (1, 10);
+insert into t3 values (1, 100), (2, 200);
+--sorted_result
+select (select min(t2.pk) from (t2 full join t3 on true)
+        where t3.pk = t1.pk or t2.a = t2.a) as f
+from t1;
+--sorted_result
+select (select min(dt.t2pk) from
+          (select t2.pk as t2pk, t2.a as t2a, t3.pk as t3pk
+             from t2 left join t3 on true
+           union
+           select t2.pk, t2.a, t3.pk from t2 right join t3 on true
+                  where t2.pk is null) dt
+        where dt.t3pk = t1.pk or dt.t2a = dt.t2a) as f
+from t1;
+drop table t1, t2, t3;
+
 --echo # ====================================================================
 --echo # Section 19: Right side of FULL JOIN must be a base table
 --echo # ====================================================================
