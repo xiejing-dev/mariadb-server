@@ -16,6 +16,7 @@
 
 #define MYSQL_SERVER
 #include "mariadb.h"
+#include "my_xml.h"
 #include "sql_class.h"
 #include "sql_lex.h"
 #include "sql_type_xmltype.h"
@@ -61,6 +62,8 @@ const Type_handler *Type_collection_xmltype::aggregate_for_num_op(
   return NULL;
 }
 
+
+constexpr LEX_CSTRING Type_handler_xmltype::name_on_client;
 
 const Type_handler *Type_handler_xmltype::type_handler_for_comparison() const
 {
@@ -181,6 +184,67 @@ int Field_xmltype::report_wrong_value(const ErrConv &val)
     table->s->db.str, table->s->table_name.str, field_name.str);
   reset();
   return 1;
+}
+
+
+static int check_parse_xml(const char *xml, size_t length, CHARSET_INFO *cs)
+{
+  MY_XML_PARSER p;
+
+  /* Prepare XML parser */
+  my_xml_parser_create(&p);
+  p.flags= MY_XML_FLAG_RELATIVE_NAMES |
+           MY_XML_FLAG_SKIP_TEXT_NORMALIZATION |
+           MY_XML_FLAG_ASSERT_WELL_FORMED;
+
+  return my_xml_parse(&p, xml, length);
+}
+
+
+int Field_xmltype::store(const char *from, size_t length, CHARSET_INFO *cs)
+{
+  if (length < 4 ||
+      check_parse_xml(from, length, cs) != MY_XML_OK)
+    goto err;
+
+
+  return Field_blob::store(from, length, cs);
+
+err:
+  get_thd()->push_warning_wrong_value(
+               Sql_condition::WARN_LEVEL_WARN, "XML", from);
+  return -1;
+}
+
+
+/*
+  We allow any string input into the XMLTYPE,
+  as it can fit into LONG BLOB without any loss.
+  But in any case values themselves can be invalid XML-s.
+
+  TODO: when the replication start sending UDT informatio,
+  we should only return CONV_TYPE_PRECISE for the XMLTYPE.
+*/
+enum_conv_type
+Field_xmltype::rpl_conv_type_from(const Conv_source &source,
+                                  const Relay_log_info *rli,
+                                  const Conv_param &param) const
+{
+  const Type_handler *th= source.type_handler();
+  if (th == &type_handler_tiny_blob ||
+      th == &type_handler_medium_blob ||
+      th == &type_handler_long_blob ||
+      th == &type_handler_blob ||
+      th == &type_handler_blob_compressed ||
+      th == &type_handler_string ||
+      th == &type_handler_var_string ||
+      th == &type_handler_varchar ||
+      th == &type_handler_varchar_compressed)
+  {
+    return CONV_TYPE_PRECISE;
+  }
+
+  return CONV_TYPE_IMPOSSIBLE;
 }
 
 

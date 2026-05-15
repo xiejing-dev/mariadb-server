@@ -123,7 +123,7 @@ ulong total_ha_2pc= 0;
 /*
   Number of non-mandatory 2pc handlertons whose initialization failed
   to estimate total_ha_2pc value under supposition of the failures
-  have not occured.
+  have not occurred.
 */
 ulong failed_ha_2pc= 0;
 #endif
@@ -4780,6 +4780,8 @@ int handler::update_auto_increment()
 /** @brief
   MySQL signal that it changed the column bitmap
 
+  @param mark_for_update  whether to mark indexed virtual columns
+			  for UPDATE operations
   USAGE
     This is for handlers that needs to setup their own column bitmaps.
     Normally the handler should set up their own column bitmaps in
@@ -4790,7 +4792,7 @@ int handler::update_auto_increment()
     rnd_init() call is made as after this, MySQL will not use the bitmap
     for any program logic checking.
 */
-void handler::column_bitmaps_signal()
+void handler::column_bitmaps_signal(bool mark_for_update)
 {
   DBUG_ENTER("column_bitmaps_signal");
   if (table)
@@ -6694,8 +6696,15 @@ static int ha_create_table_from_share(THD *thd, TABLE_SHARE *share,
   if (error)
   {
     if (!thd->is_error())
-      my_error(ER_CANT_CREATE_TABLE, MYF(0), share->db.str,
-               share->table_name.str, error);
+    {
+      if (create_info->options & HA_CREATE_TMP_ALTER)
+        my_printf_error(ER_CANT_CREATE_TABLE,
+                        ER_THD(thd, ER_CANT_CREATE_TMP_ALTER_TABLE),
+                        MYF(0), share->db.str, share->table_name.str, error);
+      else
+        my_error(ER_CANT_CREATE_TABLE, MYF(0), share->db.str,
+                 share->table_name.str, error);
+    }
     table.file->print_error(error, MYF(ME_WARNING));
   }
   *ref_length= table.file->ref_length; // for hlindexes

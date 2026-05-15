@@ -1016,6 +1016,16 @@ bool Item_field::intersect_field_part_of_key(void *arg)
 }
 
 
+bool Item_field::get_context_for_vcol_processor(void *arg)
+{
+  Name_resolution_context **to_context= (Name_resolution_context **) arg;
+  if (!*to_context)
+    *to_context= context;
+  DBUG_ASSERT(*to_context == context);
+  return 0;
+}
+
+
 bool Item::check_cols(uint c)
 {
   if (c != 1)
@@ -5512,9 +5522,14 @@ longlong Item_copy_string::val_int()
 {
   DBUG_ASSERT(copied_in);
   int err;
-  return null_value ? 0 : str_value.charset()->strntoll(str_value.ptr(),
-                                                        str_value.length(), 10,
-                                                        (char**) 0, &err);
+  if (null_value)
+    return 0;
+  if (unsigned_flag)
+    return (longlong)
+        str_value.charset()->strntoull(str_value.ptr(), str_value.length(),
+                                       10, 0, &err);
+  return str_value.charset()->strntoll(str_value.ptr(), str_value.length(),
+                                       10, 0, &err);
 }
 
 
@@ -8357,6 +8372,20 @@ Item *Item_direct_view_ref::derived_field_transformer_for_having(THD *thd,
 }
 
 
+/*
+  @brief
+    Given an @p item from this select, check if it originates from
+    derived table made from select @p sel. If yes, return the item
+    expression from select @p sel that produces it.
+
+  @note
+    Also check the multiple equality that @p item is a member of.
+
+  @return
+    The item in sel's select list that is the source for @p item.
+    NULL if the item is not found.
+*/
+
 static
 Item *find_producing_item(Item *item, st_select_lex *sel)
 {
@@ -8406,6 +8435,16 @@ Item *Item_field::derived_field_transformer_for_where(THD *thd, uchar *arg)
       producing_clone->marker|= MARKER_SUBSTITUTION;
     return producing_clone;
   }
+  /*
+    This item doesn't come from the SELECT that we're pushing condition into.
+    This can be due to:
+     - This item refers to a constant expression. Currently we push those
+       down anyway.
+     - This item is inside Item_direct_view_ref object, call it $REF. $REF
+       participates in multiple equality which includes a pushable item $PI.
+       $REF->derived_field_transformer_for_where() will make sure that $PI
+       is pushed down instead.
+  */
   return this;
 }
 
@@ -8437,6 +8476,17 @@ Item *Item_field::grouping_field_transformer_for_where(THD *thd, uchar *arg)
       producing_clone->marker|= MARKER_SUBSTITUTION;
     return producing_clone;
   }
+  /*
+    We get here in two cases:
+    1. This is DEFAULT(field). TODO: Should this be pushed?
+    2. This item doesn't come from the SELECT that we're pushing condition
+     - This item refers to a constant expression. Currently we push those
+       down anyway.
+     - This item is inside Item_direct_view_ref object, call it $REF. $REF
+       participates in multiple equality which includes a pushable item $PI.
+       $REF->derived_field_transformer_for_where() will make sure that $PI
+       is pushed down instead.
+  */
   return this;
 }
 
@@ -10086,7 +10136,12 @@ bool Item_args::excl_dep_on_grouping_fields(st_select_lex *sel)
     if (args[i]->type() == Item::FUNC_ITEM &&
         ((Item_func *)args[i])->functype() == Item_func::UDF_FUNC)
       return false;
-    if (args[i]->const_item())
+    /*
+      Constant expression doesn't need to be checked.
+      BUT if it still reports to have references to tables, we must check that
+      only allowed columns are referred.
+    */
+    if (args[i]->const_item() && !args[i]->used_tables())
       continue;
     if (!args[i]->excl_dep_on_grouping_fields(sel))
       return false;
@@ -11388,6 +11443,7 @@ bool Item_cache_str::cache_value()
   }
   else
     value_buff.copy();
+  value_buff.mark_as_const();
   return TRUE;
 }
 

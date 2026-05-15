@@ -2789,6 +2789,11 @@ static void buf_flush_page_cleaner() noexcept
         if (recv_recovery_is_on())
           continue;
         create_spare_archive= buf_flush_archive_create(create_spare_archive);
+#ifdef WITH_WSREP
+        extern Atomic_relaxed<bool> wsrep_sst_disable_writes;
+        if (UNIV_UNLIKELY(wsrep_sst_disable_writes))
+          continue; /* See sst_disable_innodb_writes() */
+#endif
         IF_DBUG(if (log_sys.last_checkpoint_lsn > log_sys.get_first_lsn() &&
                     srv_shutdown_state < SRV_SHUTDOWN_CLEANUP &&
                     (_db_keyword_(nullptr, "ib_log_checkpoint_avoid", 1) ||

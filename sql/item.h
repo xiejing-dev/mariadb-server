@@ -2296,7 +2296,14 @@ public:
     tree. Used for updating the index coverings of vcols.
   */
   virtual bool intersect_field_part_of_key(void *arg) { return 0; }
-
+  /*
+    Get the name resolution context from the item and assign it to
+    arg, which should be the context of a newly created Item_field of
+    an indexed vcol in an indexed vcol substitution and the vcol
+    should have the same expression as the item for which walk is
+    invoked with this processor
+  */
+  virtual bool get_context_for_vcol_processor(void *arg) { return 0; }
   virtual bool enumerate_field_refs_processor(void *arg) { return 0; }
   virtual bool mark_as_eliminated_processor(void *arg) { return 0; }
   virtual bool eliminate_subselect_processor(void *arg) { return 0; }
@@ -2950,7 +2957,12 @@ protected:
   {
     for (uint i= 0; i < arg_count; i++)
     {
-      if (args[i]->const_item())
+      /*
+        Constant expression doesn't need to be checked.
+        BUT if it still reports to have references to tables, we must check
+        that only allowed table is referred.
+      */
+      if (args[i]->const_item() && !args[i]->used_tables())
         continue;
       if (!args[i]->excl_dep_on_table(tab_map))
         return false;
@@ -3996,6 +4008,7 @@ public:
   bool register_field_in_write_map(void *arg) override;
   bool register_field_in_bitmap(void *arg) override;
   bool intersect_field_part_of_key(void *arg) override;
+  bool get_context_for_vcol_processor(void *arg) override;
   bool check_partition_func_processor(void *) override {return false;}
   bool post_fix_fields_part_expr_processor(void *bool_arg) override;
   bool check_valid_arguments_processor(void *bool_arg) override;
@@ -7463,6 +7476,10 @@ public:
   { return NULL; }
   Item *derived_field_transformer_for_where(THD *thd, uchar *arg) override
   { return NULL; }
+  /*
+    Note that grouping_field_transformer_for_where() is not implemented for
+    some reason.
+  */
   Field *create_tmp_field_ex(MEM_ROOT *root, TABLE *table, Tmp_field_src *src,
                              const Tmp_field_param *param) override;
 

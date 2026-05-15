@@ -113,10 +113,6 @@ trx_init(
 
 	trx->op_info = "";
 
-	trx->active_commit_ordered = false;
-
-	trx->active_prepare = false;
-
 	trx->isolation_level = TRX_ISO_REPEATABLE_READ;
 
 	trx->check_foreigns = true;
@@ -742,7 +738,7 @@ corrupted:
 
 	if (trx_sys.is_undo_empty()) {
 func_exit:
-		purge_sys.clone_oldest_view<true>();
+		purge_sys.clone_oldest_view<true>(nullptr);
 		return DB_SUCCESS;
 	}
 
@@ -1447,6 +1443,7 @@ TRANSACTIONAL_INLINE inline void trx_t::commit_in_memory(mtr_t *mtr)
         ut_ad(!l);
 #endif /* UNIV_DEBUG */
     commit_state();
+    DEBUG_SYNC_C("trx_after_commit_state");
 
     if (id)
     {
