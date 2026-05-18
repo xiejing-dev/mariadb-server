@@ -1426,3 +1426,19 @@ SELECT  ucase((extractvalue('a', 'a'))) a FROM (select 1) dt;
 a
 
 # End of 11.4 tests
+#
+# MDEV-ASAN heap-buffer-overflow in process_str_arg upon ER_TRUNCATED_WRONG_VALUE "Incorrect XML value".
+#
+CREATE TABLE t1 (name varchar(10));
+INSERT INTO t1 VALUES ("one"), ("two"), ("three"), ("four"), ("five");
+SELECT UpdateXML(1, '/a', '') a
+FROM t1
+GROUP BY a, name;
+a
+1
+1
+1
+1
+1
+DROP TABLE t1;
+# End of 12.3 tests
