@@ -64,6 +64,11 @@ uint srv_fil_crypt_rotate_key_age;
 /** Whether the encryption plugin does key rotation */
 Atomic_relaxed<bool> srv_encrypt_rotate;
 
+#ifdef UNIV_DEBUG
+/** Number of times encryption threads used indefinite wait */
+Atomic_counter<ulint> fil_crypt_indefinite_waits;
+#endif /* UNIV_DEBUG */
+
 /** Condition variable for srv_n_fil_crypt_threads_started */
 static pthread_cond_t fil_crypt_cond;
 
@@ -1131,8 +1136,10 @@ struct rotate_thread_t {
 
 		if (space == fil_system.space_list.end()) {
 			uint max_timed_waits = 5;
+			DBUG_EXECUTE_IF("rotate_only_2_timed_waits",
+					max_timed_waits = 2;);
 			if (timed_wait_count >= max_timed_waits) {
-				timed_wait_count= 0;
+				timed_wait_count = 0;
 				goto indefinite_wait;
 			}
 
@@ -1151,6 +1158,7 @@ struct rotate_thread_t {
 			}
 		} else {
 indefinite_wait:
+			ut_d(fil_crypt_indefinite_waits++;);
 			my_cond_wait(&fil_crypt_threads_cond,
 				     &fil_crypt_threads_mutex.m_mutex);
 		}

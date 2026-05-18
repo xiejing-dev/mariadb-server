@@ -1,0 +1,8 @@
+create table t1(a serial) engine=innoDB;
+set global innodb_encryption_threads=2;
+SET GLOBAL debug_dbug="+d,rotate_only_2_timed_waits";
+set global debug_key_management_version=10;
+SET GLOBAL innodb_encrypt_tables="FORCE";
+Indefinite waits happened
+drop table t1;
+# restart

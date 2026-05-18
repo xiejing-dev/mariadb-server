@@ -375,6 +375,11 @@ Return crypt statistics
 @param[out]	stat		Crypt statistics */
 void fil_crypt_total_stat(fil_crypt_stat_t *stat);
 
+#ifdef UNIV_DEBUG
+/** Number of times encryption threads used indefinite wait */
+extern Atomic_counter<ulint> fil_crypt_indefinite_waits;
+#endif /* UNIV_DEBUG */
+
 #include "fil0crypt.inl"
 #endif /* !UNIV_INNOCHECKSUM */
 
