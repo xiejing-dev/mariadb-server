@@ -145,7 +145,8 @@ Type_handler_xmltype::make_constructor_item(THD *thd, List<Item> *args) const
     return NULL;
   Item_args tmp(thd, *args);
   return new (thd->mem_root)
-    Item_xmltype_typecast(thd, tmp.arguments()[0], NULL);
+    Item_xmltype_typecast(thd, tmp.arguments()[0],
+                          thd->variables.collation_connection);
 }
 
 
@@ -190,6 +191,7 @@ int Field_xmltype::report_wrong_value(const ErrConv &val)
 static int check_parse_xml(const char *xml, size_t length, CHARSET_INFO *cs)
 {
   MY_XML_PARSER p;
+  int result;
 
   /* Prepare XML parser */
   my_xml_parser_create(&p);
@@ -197,7 +199,10 @@ static int check_parse_xml(const char *xml, size_t length, CHARSET_INFO *cs)
            MY_XML_FLAG_SKIP_TEXT_NORMALIZATION |
            MY_XML_FLAG_ASSERT_WELL_FORMED;
 
-  return my_xml_parse(&p, xml, length);
+  result= my_xml_parse(&p, xml, length);
+  my_xml_parser_free(&p);
+
+  return result;
 }
 
 
@@ -211,8 +216,13 @@ int Field_xmltype::store(const char *from, size_t length, CHARSET_INFO *cs)
   return Field_blob::store(from, length, cs);
 
 err:
-  get_thd()->push_warning_wrong_value(
-               Sql_condition::WARN_LEVEL_WARN, "XML", from);
+  if (maybe_null())
+    set_null();
+  else
+    Field_blob::store(STRING_WITH_LEN("<invalid_xml_replaced />"), cs);
+
+  my_error(ER_WRONG_VALUE, MYF(0),
+           "XMLTYPE", ErrConvString(from, length, cs).ptr());
   return -1;
 }
 
@@ -277,8 +287,33 @@ bool Item_xmltype_typecast::fix_length_and_dec(THD *thd)
 {
   Item_char_typecast::fix_length_and_dec_str();
   set_func_handler(&item_xmltype_typecast_func_handler);
+
+  if (cast_charset()->mbminlen > 1)
+  {
+    my_error(ER_NOT_SUPPORTED_YET, MYF(0),
+             "CAST(AS XMLTYPE CHARACTER SET ucs2/utf16/utf32)");
+    return true;
+  }
+
   return false;
 }
+
+
+String *Item_xmltype_typecast::val_str(String *to)
+{
+  String *res= Item_char_typecast::val_str(to);
+  if (!res)
+    return NULL;
+
+  if (check_parse_xml(res->ptr(), res->length(), res->charset()) != MY_XML_OK)
+  {
+    null_value= TRUE;
+    return NULL;
+  }
+
+  return res;
+}
+
 
 void Item_xmltype_typecast::print(String *str, enum_query_type query_type)
 {
