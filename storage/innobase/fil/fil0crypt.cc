@@ -46,6 +46,12 @@ static bool fil_crypt_threads_inited = false;
 /** Is encryption enabled/disabled */
 ulong srv_encrypt_tables;
 
+/** Version counter for innodb_encrypt_tables changes.
+Incremented each time innodb_encrypt_tables or
+innodb_encryption_rotate_key_age is modified to signal
+encryption threads to restart iteration */
+static Atomic_counter<uint32_t> fil_crypt_settings_version;
+
 /** No of key rotation threads requested */
 uint srv_n_fil_crypt_threads;
 
@@ -1028,7 +1034,8 @@ static constexpr uint8_t sleep_timeout= 5;
 
 /** State of a rotation thread */
 struct rotate_thread_t {
-  explicit rotate_thread_t(uint no) : thread_no(no) {}
+  explicit rotate_thread_t(uint no) :
+    settings_version(fil_crypt_settings_version), thread_no(no){}
 
   bool first = true;              /*!< is position before first space */
 
@@ -1044,6 +1051,11 @@ struct rotate_thread_t {
   by signal or when work is found. */
   uint8_t timed_wait_count= 0;
 
+  /** Config version when thread started current iteration.
+  Used to detect innodb_encrypt_tables changes during iteration
+  and restart from beginning to ensure complete encryption coverage. */
+  uint32_t settings_version;
+
   uint thread_no;
   uint32_t offset = 0;            /*!< current page number */
   uint min_key_version_found = 0; /*!< min key version found but not rotated */
@@ -1057,6 +1069,12 @@ struct rotate_thread_t {
   ulint cnt_waited = 0;	       /*!< #times waited during this slot */
   uintmax_t sum_waited_us = 0; /*!< wait time during this slot */
   fil_crypt_stat_t crypt_stat; // statistics
+
+  /** Check if innodb_encrypt_tables config has changed.
+  @return true if config changed, requiring iteration restart */
+  bool settings_changed() const {
+	return settings_version != fil_crypt_settings_version;
+  }
 
 	/** @return whether this thread should terminate */
 	bool should_shutdown() const {
@@ -1112,8 +1130,9 @@ struct rotate_thread_t {
 		}
 
 		if (space == fil_system.space_list.end()) {
-			if (timed_wait_count >= 5) {
-				timed_wait_count = 0;
+			uint max_timed_waits = 5;
+			if (timed_wait_count >= max_timed_waits) {
+				timed_wait_count= 0;
 				goto indefinite_wait;
 			}
 
@@ -2125,23 +2144,30 @@ static void fil_crypt_thread()
 		/* if we find a tablespace that is starting, skip over it
 		and recheck it later */
 		bool recheck = false;
-
 wait_for_work:
 		thr.wait_for_work(recheck);
 
+restart_iteration:
 		recheck = false;
 		thr.first = true;      // restart from first tablespace
+		thr.settings_version = fil_crypt_settings_version;
 		key_state_t new_state;
 
 		/* iterate all spaces searching for those needing rotation */
 		while (fil_crypt_find_space_to_rotate(&new_state, &thr,
 						      &recheck)) {
+			/* Check if innodb_encrypt_tables or
+			innodb_encryption_rotate_key_age changed during
+			iteration. If changed, restart immediately */
+			if (thr.settings_changed()) {
+				goto restart_iteration;
+			}
 
 			if (thr.space == fil_system.space_list.end()) {
 				/* When iterating fil_system.space_list,
 				reaching .end(), it could mean all spaces
 				are encrypted, or some spaces were temporarily
-                                unacquirable (CLOSING flag, DDL in progress).
+				unacquirable (CLOSING flag, DDL in progress).
 
 				For default_encrypt_list: Spaces exist but
 				none are acquirable. Wake other threads
@@ -2323,6 +2349,10 @@ void fil_crypt_set_rotate_key_age(uint val)
   if (val == 0)
     fil_crypt_default_encrypt_tables_fill();
   mysql_mutex_unlock(&fil_system.mutex);
+
+  /* Increment version to signal threads to restart iteration */
+  fil_crypt_settings_version++;
+
   pthread_cond_broadcast(&fil_crypt_threads_cond);
   mysql_mutex_unlock(&fil_crypt_threads_mutex);
 }
@@ -2376,6 +2406,9 @@ void fil_crypt_set_encrypt_tables(ulong val)
     fil_crypt_default_encrypt_tables_fill();
 
   mysql_mutex_unlock(&fil_system.mutex);
+
+  /* Increment version to signal threads to restart iteration */
+  fil_crypt_settings_version++;
 
   pthread_cond_broadcast(&fil_crypt_threads_cond);
   mysql_mutex_unlock(&fil_crypt_threads_mutex);
