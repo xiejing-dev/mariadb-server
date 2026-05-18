@@ -21264,13 +21264,37 @@ static void restore_prev_nj_state(JOIN_TAB *last)
 
 
 /*
-  Compute full_join_nest_tables, the union of direct_children_map of
-  every join nest that transitively contains a FULL JOIN table.
+  Walk the join tree and collect, into full_join_nest_tables, every
+  table that participates in any FULL JOIN.  The optimizer must keep
+  those tables adjacent in the join order because the FULL JOIN
+  null-complement algorithm requires it.
 
-  The optimizer must place all tables of such a nest before placing
-  tables outside it, because the FULL JOIN null-complement algorithm
-  requires its tables to be adjacent in the join order.
+  A FULL JOIN table can be an actual table or a nested join.  We
+  recognize either by the JOIN_TYPE_FULL flag, then OR in all of the
+  tables it covers.
 */
+
+static void
+collect_full_join_tables(JOIN *join, List<TABLE_LIST> *lst)
+{
+  TABLE_LIST *tl= nullptr;
+  List_iterator<TABLE_LIST> it(*lst);
+
+  while ((tl= it++))
+  {
+    if (tl->outer_join & JOIN_TYPE_FULL)
+    {
+      if (tl->nested_join)
+        join->full_join_nest_tables|= tl->nested_join->used_tables;
+      else if (tl->table)
+        join->full_join_nest_tables|= tl->table->map;
+    }
+
+    if (tl->nested_join)
+      collect_full_join_tables(join, &tl->nested_join->join_list);
+  }
+}
+
 
 static void
 compute_full_join_nest_tables(JOIN *join, SELECT_LEX *lex)
@@ -21279,22 +21303,7 @@ compute_full_join_nest_tables(JOIN *join, SELECT_LEX *lex)
   if (!join->thd->lex->full_join_count)
     return;
 
-  TABLE_LIST *tl;
-  List_iterator<TABLE_LIST> ti(lex->leaf_tables);
-  while ((tl= ti++))
-  {
-    if (!(tl->outer_join & JOIN_TYPE_FULL))
-      continue;
-
-    for (TABLE_LIST *embedding= tl->embedding;
-         embedding;
-         embedding= embedding->embedding)
-    {
-      if (embedding->nested_join)
-        join->full_join_nest_tables|=
-          embedding->nested_join->direct_children_map;
-    }
-  }
+  collect_full_join_tables(join, &lex->top_join_list);
 }
 
 

@@ -3333,6 +3333,41 @@ f
 1
 1
 drop table t1, t2, t3;
+# First, an inner FULL JOIN leaf that
+# carries its own on_expr did not inherit dep_tables from the
+# enclosing nests, so its dependency on the leftmost FULL JOIN
+# table was lost and the optimizer would pick it as the first
+# table.  Second, compute_full_join_nest_tables iterated only
+# FULL JOIN leaves and walked their embedding chain, missing
+# any FULL JOIN table whose left side was a nest of inner
+# joins (where the nest carries JOIN_TYPE_FULL but its leaves
+# do not).  These two issues led to an invalid FULL JOIN table
+# order.
+create table t1 (pk int);
+create table t2 (pk int);
+create table t3 (pk int);
+create table t4 (pk int);
+create table t5 (pk int);
+select t2.pk as field1 from t1
+full join t2
+full join t4
+full join t5 right join t3 on (true)
+on (true)
+full join t5 as alias2 on (true)
+on (true)
+on t1.pk = alias2.pk;
+field1
+drop table t1, t2, t3, t4, t5;
+# The FULL JOIN table can be a nest of inner joins, so in that
+# case the nest carries JOIN_TYPE_FULL but its leaves do not.
+# compute_full_join_nest_tables must still pick those leaves
+# up.
+create table t1 (a int);
+create table t2 (a int);
+create table t3 (a int);
+select * from t1 inner join t2 full join t3 on t1.a=t3.a;
+a	a	a
+drop table t1, t2, t3;
 # ====================================================================
 # Section 19: Right side of FULL JOIN must be a base table
 # ====================================================================
