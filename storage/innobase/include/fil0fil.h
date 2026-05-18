@@ -1062,10 +1062,15 @@ public:
   @param recheck  whether the removal condition needs to be rechecked after
                   encryption parameters were changed
   @param encrypt  expected state of innodb_encrypt_tables
+  @param default_encrypt_list  set to true when default_encrypt_list
+                               has unacquirable spaces (signals need
+                               to wake other threads);
+                               false for fil_system.space_list iteration
   @return the next tablespace
   @retval nullptr upon reaching the end of the iteration */
   static space_list_t::iterator next(space_list_t::iterator space,
-                                     bool recheck, bool encrypt) noexcept;
+                                     bool recheck, bool encrypt,
+                                     bool *default_encrypt_list) noexcept;
 
 #ifdef UNIV_DEBUG
   bool is_latched() const noexcept { return latch.have_any(); }
