@@ -22,6 +22,7 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #endif /* WITH_WSREP */
 
 #include "table.h"
+#include "row0pread.h"
 
 /* The InnoDB handler: the interface between MySQL and InnoDB. */
 
@@ -182,6 +183,8 @@ public:
                 const key_range*        min_key,
                 const key_range*        max_key,
                 page_range*             pages) override;
+
+	ha_rows records() override;
 
 	ha_rows estimate_rows_upper_bound() override;
 
@@ -498,6 +501,13 @@ protected:
 
 	int info_low(uint, bool);
 
+	/** Implementations of handler API for parallel scans */
+	int init_parallel_scan(size_t n_threads) override;
+
+	::Parallel_scan::Worker_ctx *get_worker_context(size_t worker_idx) override;
+
+	int pscan_get_next_row(Parallel_scan::Worker_ctx *ctx) override;
+
 	/** The multi range read session object */
 	DsMrr_impl		m_ds_mrr;
 
@@ -534,6 +544,9 @@ protected:
 	/** If true, disable the Rowid Filter. It is disabled when
 	the engine is intialized for making rnd_pos() calls */
 	bool                    m_disable_rowid_filter;
+
+	// OLEGS: describe
+	Parallel_reader m_parallel_reader;
 };
 
 

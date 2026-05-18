@@ -99,6 +99,7 @@ bool is_update_query(enum enum_sql_command command);
 #include "row0quiesce.h"
 #include "row0sel.h"
 #include "row0upd.h"
+#include "row0pread.h"
 #include "fil0crypt.h"
 #include "srv0mon.h"
 #include "srv0start.h"
@@ -2934,6 +2935,7 @@ ha_innobase::ha_innobase(
                           | HA_CAN_ONLINE_BACKUPS
 			  | HA_CONCURRENT_OPTIMIZE
 			  | HA_CAN_SKIP_LOCKED
+			  | HA_CAN_PARALLEL_SCAN
 		  ),
 	m_start_of_scan(),
         m_mysql_has_locked()
@@ -14453,6 +14455,39 @@ func_exit:
 	}
 
 	goto cleanup;
+}
+
+// OLEGS: debug purposes of parallel scans
+ha_rows ha_innobase::records()
+{
+  if (!is_parallel_scan_supported())
+    return handler::records();   // estimate
+  return init_parallel_scan(8 /*n_threads*/);   // exact
+}
+
+int ha_innobase::init_parallel_scan(size_t n_threads)
+{
+	const Parallel_reader::Scan_range FULL_SCAN;
+  	m_parallel_reader.initialize(n_threads);
+
+	// Get the clustered index which is always first in the list
+	dict_index_t *index = m_prebuilt->table->indexes.start;
+	ut_ad(index->is_clust());
+	Parallel_reader::Config config(FULL_SCAN, index);
+
+	return m_parallel_reader.add_scan(m_prebuilt->trx, config, 
+		[&](const Parallel_reader::Ctx *ctx) {return DB_SUCCESS;});
+}
+
+::Parallel_scan::Worker_ctx *ha_innobase::get_worker_context(
+	size_t worker_idx)
+{
+	return m_parallel_reader.get_worker_ctx(worker_idx);
+}
+
+int ha_innobase::pscan_get_next_row(Parallel_scan::Worker_ctx *ctx)
+{
+	return 0;
 }
 
 /*********************************************************************//**
