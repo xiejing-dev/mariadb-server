@@ -781,58 +781,6 @@ public:
   }
 };
 
-class thread_safe_trx_ilist_t
-{
-public:
-  void create() { mysql_mutex_init(trx_sys_mutex_key, &mutex, nullptr); }
-  void close() { mysql_mutex_destroy(&mutex); }
-
-  bool empty() const
-  {
-    mysql_mutex_lock(&mutex);
-    auto result= trx_list.empty();
-    mysql_mutex_unlock(&mutex);
-    return result;
-  }
-
-  void push_front(trx_t &trx)
-  {
-    mysql_mutex_lock(&mutex);
-    trx_list.push_front(trx);
-    mysql_mutex_unlock(&mutex);
-  }
-
-  void remove(trx_t &trx)
-  {
-    mysql_mutex_lock(&mutex);
-    trx_list.remove(trx);
-    mysql_mutex_unlock(&mutex);
-  }
-
-  template <typename Callable> void for_each(Callable &&callback) const
-  {
-    mysql_mutex_lock(&mutex);
-    for (const auto &trx : trx_list)
-      callback(trx);
-    mysql_mutex_unlock(&mutex);
-  }
-
-  template <typename Callable> void for_each(Callable &&callback)
-  {
-    mysql_mutex_lock(&mutex);
-    for (auto &trx : trx_list)
-      callback(trx);
-    mysql_mutex_unlock(&mutex);
-  }
-
-  void freeze() const { mysql_mutex_lock(&mutex); }
-  void unfreeze() const { mysql_mutex_unlock(&mutex); }
-
-private:
-  alignas(CPU_LEVEL1_DCACHE_LINESIZE) mutable mysql_mutex_t mutex;
-  alignas(CPU_LEVEL1_DCACHE_LINESIZE) ilist<trx_t> trx_list;
-};
-
 /** The transaction system central memory data structure. */
 class trx_sys_t
 {
@@ -858,9 +806,10 @@ class trx_sys_t
   bool m_initialised;
 
 public:
-  /** List of all transactions. */
-  thread_safe_trx_ilist_t trx_list;
+  /** List of all transactions; protected by lock_sys.latch */
+  ilist<trx_t> trx_list;
 
+  alignas(CPU_LEVEL1_DCACHE_LINESIZE)
   /** Temporary rollback segments */
   trx_rseg_t temp_rsegs[TRX_SYS_N_RSEGS];
 
@@ -1102,7 +1051,7 @@ public:
   void close();
 
   /** @return total number of active (non-prepared) transactions */
-  size_t any_active_transactions(size_t *prepared= nullptr);
+  size_t any_active_transactions(size_t *prepared= nullptr) noexcept;
 
 
   /**
@@ -1179,10 +1128,7 @@ public:
 
     @param trx transaction
   */
-  void register_trx(trx_t *trx)
-  {
-    trx_list.push_front(*trx);
-  }
+  inline void register_trx(trx_t *trx) noexcept;
 
 
   /**
@@ -1190,10 +1136,7 @@ public:
 
     @param trx transaction
   */
-  void deregister_trx(trx_t *trx)
-  {
-    trx_list.remove(*trx);
-  }
+  inline void deregister_trx(trx_t *trx) noexcept;
 
 
   /**
@@ -1207,17 +1150,7 @@ public:
 
 
   /** @return the number of active views */
-  size_t view_count() const
-  {
-    size_t count= 0;
-
-    trx_list.for_each([&count](const trx_t &trx) {
-      if (trx.read_view.is_open())
-        ++count;
-    });
-
-    return count;
-  }
+  size_t view_count() const noexcept;
 
   /** Disable further allocation of transactions in a rollback segment
   that are subject to innodb_undo_log_truncate=ON

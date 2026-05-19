@@ -29,6 +29,7 @@ Created 2/16/1997 Heikki Tuuri
 #include "srv0srv.h"
 #include "trx0sys.h"
 #include "trx0purge.h"
+#include "lock0lock.h"
 
 /*
 -------------------------------------------------------------------------------
@@ -259,7 +260,8 @@ void trx_sys_t::clone_oldest_view(ReadViewBase *view) const
 {
   view->snapshot(nullptr);
   /* Find oldest view. */
-  trx_list.for_each([view](const trx_t &trx) {
-                      trx.read_view.append_to(view);
-		    });
+  lock_sys.rd_lock(SRW_LOCK_CALL);
+  for (const trx_t &trx : trx_list)
+    trx.read_view.append_to(view);
+  lock_sys.rd_unlock();
 }

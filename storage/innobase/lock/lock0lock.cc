@@ -5239,43 +5239,30 @@ lock_trx_print_locks(
 	}
 }
 
-/** Functor to display all transactions */
-struct lock_print_info
+/*********************************************************************//**
+Prints info of locks for each transaction. This function will release
+lock_sys.latch, which the caller must be holding in exclusive mode.
+@param file  output stream */
+void lock_print_info_all_transactions(FILE *file)
 {
-  lock_print_info(FILE* file, my_hrtime_t now) :
-    file(file), now(now),
-    purge_trx(purge_sys.query ? purge_sys.query->trx : nullptr)
-  {}
+  fprintf(file, "LIST OF TRANSACTIONS FOR EACH SESSION:\n");
 
-  void operator()(const trx_t &trx) const
+  const trx_t *const purge_trx= purge_sys.query
+    ? purge_sys.query->trx : nullptr;
+  const my_hrtime_t now{my_hrtime_coarse()};
+
+  for (const trx_t &trx : trx_sys.trx_list)
   {
     if (UNIV_UNLIKELY(&trx == purge_trx))
-      return;
+      continue;
     lock_trx_print_wait_and_mvcc_state(file, &trx, now);
 
     if (trx.will_lock && srv_print_innodb_lock_monitor)
       lock_trx_print_locks(file, &trx);
   }
 
-  FILE* const file;
-  const my_hrtime_t now;
-  const trx_t* const purge_trx;
-};
-
-/*********************************************************************//**
-Prints info of locks for each transaction. This function will release
-lock_sys.latch, which the caller must be holding in exclusive mode. */
-void
-lock_print_info_all_transactions(
-/*=============================*/
-	FILE*		file)	/*!< in/out: file where to print */
-{
-	fprintf(file, "LIST OF TRANSACTIONS FOR EACH SESSION:\n");
-
-	trx_sys.trx_list.for_each(lock_print_info(file, my_hrtime_coarse()));
-	lock_sys.wr_unlock();
-
-	ut_d(lock_validate());
+  lock_sys.wr_unlock();
+  ut_d(lock_validate());
 }
 
 #ifdef UNIV_DEBUG

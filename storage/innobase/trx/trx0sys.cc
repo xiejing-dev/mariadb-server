@@ -40,6 +40,8 @@ Created 3/26/1996 Heikki Tuuri
 #include "log0log.h"
 #include "log0recv.h"
 #include "os0file.h"
+#include "lock0lock.h"
+#include "log.h"
 
 /** The transaction system */
 trx_sys_t		trx_sys;
@@ -172,7 +174,6 @@ void trx_sys_t::create()
   ut_ad(this == &trx_sys);
   ut_ad(!is_initialised());
   m_initialised= true;
-  trx_list.create();
   rw_trx_hash.init();
   for (auto &rseg : temp_rsegs)
     rseg.init(nullptr, FIL_NULL);
@@ -362,11 +363,12 @@ trx_sys_t::close()
 		return;
 	}
 
+	lock_sys.rd_lock(SRW_LOCK_CALL);
 	if (size_t size = view_count()) {
-		ib::error() << "All read views were not closed before"
-			" shutdown: " << size << " read views open";
+		sql_print_error("InnoDB: All read views were not closed before"
+				" shutdown: %zu read views open", size);
 	}
-
+	lock_sys.rd_unlock();
 	rw_trx_hash.destroy();
 
 	/* There can't be any active transactions. */
@@ -374,16 +376,15 @@ trx_sys_t::close()
 	for (auto& rseg : rseg_array) rseg.destroy();
 
 	ut_a(trx_list.empty());
-	trx_list.close();
 	m_initialised = false;
 }
 
 /** @return total number of active (non-prepared) transactions */
-size_t trx_sys_t::any_active_transactions(size_t *prepared)
+size_t trx_sys_t::any_active_transactions(size_t *prepared) noexcept
 {
   size_t total_trx= 0, prepared_trx= 0;
 
-  trx_sys.trx_list.for_each([&](const trx_t &trx) {
+  for (const trx_t &trx : trx_list)
     switch (trx.state) {
     case TRX_STATE_NOT_STARTED:
     case TRX_STATE_ABORTED:
@@ -399,7 +400,6 @@ size_t trx_sys_t::any_active_transactions(size_t *prepared)
     case TRX_STATE_PREPARED_RECOVERED:
       prepared_trx++;
     }
-  });
 
   if (prepared)
     *prepared= prepared_trx;

@@ -695,6 +695,20 @@ static void srv_refresh_innodb_monitor_stats(time_t current_time)
 	mysql_mutex_unlock(&srv_innodb_monitor_mutex);
 }
 
+size_t trx_sys_t::view_count() const noexcept
+{
+  ut_ad(lock_sys.is_holder());
+
+  size_t count{0};
+
+  for (const trx_t &trx : trx_list)
+    if (trx.read_view.is_open())
+      ++count;
+
+  return count;
+}
+
+
 /******************************************************************//**
 Outputs to a file the output of the InnoDB Monitor.
 @return FALSE if not all information printed
@@ -760,6 +774,7 @@ srv_printf_innodb_monitor(
 		ut_copy_file(file, dict_foreign_err_file);
 	}
 
+	size_t view_count{0};
 	mysql_mutex_unlock(&dict_foreign_err_mutex);
 
 	/* Only if lock_print_info_summary proceeds correctly,
@@ -777,6 +792,8 @@ srv_printf_innodb_monitor(
 				*trx_start_pos = (ulint) t;
 			}
 		}
+
+		view_count = trx_sys.view_count();
 
 		/* NOTE: The following function will release the lock_sys.latch
 		that lock_print_info_summary() acquired. */
@@ -848,11 +865,11 @@ srv_printf_innodb_monitor(
 
 	buf_print_io(file);
 
-	fputs("--------------\n"
-	      "ROW OPERATIONS\n"
-	      "--------------\n", file);
-	fprintf(file, ULINTPF " read views open inside InnoDB\n",
-		trx_sys.view_count());
+	fprintf(file,
+		"--------------\n"
+		"ROW OPERATIONS\n"
+		"--------------\n"
+		"%zu read views open inside InnoDB\n", view_count);
 
 	if (ulint n_reserved = fil_system.sys_space->n_reserved_extents) {
 		fprintf(file,

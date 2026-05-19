@@ -1534,42 +1534,6 @@ inline void buf_pool_t::page_hash_table::write_unlock_all() noexcept
 }
 
 
-namespace
-{
-
-struct find_interesting_trx
-{
-  void operator()(const trx_t &trx)
-  {
-    if (!trx.is_started())
-      return;
-    if (trx.mysql_thd == nullptr)
-      return;
-    if (withdraw_started <= trx.start_time_micro)
-      return;
-
-    if (!found)
-    {
-      sql_print_warning("InnoDB: The following trx might hold "
-                    "the blocks in buffer pool to "
-                    "be withdrawn. Buffer pool "
-                    "resizing can complete only "
-                    "after all the transactions "
-                    "below release the blocks.");
-      found= true;
-    }
-
-    lock_trx_print_wait_and_mvcc_state(stderr, &trx, current_time);
-  }
-
-  bool &found;
-  /** microsecond_interval_timer() */
-  const ulonglong withdraw_started;
-  const my_hrtime_t current_time;
-};
-
-} // namespace
-
 /** Resize from srv_buf_pool_old_size to srv_buf_pool_size. */
 inline void buf_pool_t::resize()
 {
@@ -1656,15 +1620,37 @@ withdraw_retry:
 			message_interval *= 2;
 		}
 
-		bool found= false;
-		find_interesting_trx f
-			{found, withdraw_started, my_hrtime_coarse()};
 		withdraw_started = current_time;
+		const my_hrtime_t current_hrtime{my_hrtime_coarse()};
+		bool found{false};
 
 		/* This is going to exceed the maximum size of a
 		memory transaction. */
 		LockMutexGuard g{SRW_LOCK_CALL};
-		trx_sys.trx_list.for_each(f);
+		for (const trx_t& trx: trx_sys.trx_list) {
+			if (!trx.is_started() || !trx.mysql_thd
+			    || withdraw_started <= trx.start_time_micro) {
+				continue;
+			}
+
+			if (!found) {
+				sql_print_warning("InnoDB: The following "
+						  "trx might hold "
+						  "the blocks in "
+						  "buffer pool to "
+						  "be withdrawn. "
+						  "Buffer pool "
+						  "resizing can "
+						  "complete only "
+						  "after all "
+						  "the transactions "
+						  "below release the blocks.");
+				found = true;
+			}
+
+			lock_trx_print_wait_and_mvcc_state(stderr, &trx,
+							   current_hrtime);
+		}
 	}
 
 	if (should_retry_withdraw) {

@@ -999,7 +999,7 @@ trx_i_s_cache_clear(
   innodb_locks' and innodb_lock_waits' caches.
 */
 
-static void fetch_data_into_cache_low(trx_i_s_cache_t *cache, const trx_t *trx)
+static bool fetch_data_into_cache_low(trx_i_s_cache_t *cache, const trx_t *trx)
 {
   i_s_locks_row_t *requested_lock_row;
 
@@ -1028,13 +1028,14 @@ static void fetch_data_into_cache_low(trx_i_s_cache_t *cache, const trx_t *trx)
         table_cache_create_empty_row(&cache->innodb_trx, cache)))
     {
       if (fill_trx_row(trx_row, trx, requested_lock_row, cache))
-        return;
+        return false;
       --cache->innodb_trx.rows_used;
     }
   }
 
   /* memory could not be allocated */
   cache->is_truncated= true;
+  return true;
 }
 
 
@@ -1045,21 +1046,25 @@ static void fetch_data_into_cache_low(trx_i_s_cache_t *cache, const trx_t *trx)
 
 static void fetch_data_into_cache(trx_i_s_cache_t *cache)
 {
-  LockMutexGuard g{SRW_LOCK_CALL};
+  /* these are protected by cache->rw_lock.wr_lock() */
+  cache->is_truncated= false;
   trx_i_s_cache_clear(cache);
 
+  LockMutexGuard g{SRW_LOCK_CALL};
+  const trx_t *const purge_trx= purge_sys.query
+    ? purge_sys.query->trx : nullptr;
+
   /* Capture the state of transactions */
-  trx_sys.trx_list.for_each([cache](trx_t &trx) {
-    if (!cache->is_truncated && trx.state != TRX_STATE_NOT_STARTED &&
-        &trx != (purge_sys.query ? purge_sys.query->trx : nullptr))
+  for (trx_t &trx : trx_sys.trx_list)
+    if (trx.state != TRX_STATE_NOT_STARTED && &trx != purge_trx)
     {
       trx.mutex_lock();
-      if (trx.is_started())
+      const bool truncated= trx.is_started() &&
         fetch_data_into_cache_low(cache, &trx);
       trx.mutex_unlock();
+      if (truncated)
+        break;
     }
-  });
-  cache->is_truncated= false;
 }
 
 
