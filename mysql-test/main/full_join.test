@@ -2260,6 +2260,24 @@ create table t3 (a int);
 select * from t1 inner join t2 full join t3 on t1.a=t3.a;
 drop table t1, t2, t3;
 
+--echo # Both FULL JOIN tables carried the ON expression which broke
+--echo # dependency propagation during make_join_statistics.  Rather
+--echo # than make changes there, just carry the ON expression on only
+--echo # one of the FULL JOIN tables, like the other join types do.
+create table t1 (pk int);
+create table t2 (pk int);
+create table t3 (pk int);
+create table t4 (pk int);
+insert into t1 values (1), (2);
+select max(t3.pk) from t1
+  full join t2
+  full join t3 on t2.pk = t3.pk
+  full join t1 as alias5
+  full join t4 on (true)
+  on t3.pk = alias5.pk
+  on t1.pk = alias5.pk;
+drop table t1, t2, t3, t4;
+
 --echo # ====================================================================
 --echo # Section 19: Right side of FULL JOIN must be a base table
 --echo # ====================================================================

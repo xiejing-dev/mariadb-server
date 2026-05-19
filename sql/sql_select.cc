@@ -20188,20 +20188,6 @@ static void rewrite_full_to_left(TABLE_LIST *left_table,
     is called.
   */
   DBUG_ASSERT(right_table->on_expr);
-
-  /*
-    Clear the left table's ON expression and prep_on_expr.  The
-    parser set on_expr on both sides of the FULL JOIN via
-    add_join_on(), but after the rewrite to LEFT JOIN only the
-    right table should carry the ON clause.  Clear prep_on_expr
-    too so reinit_before_use() won't restore a stale expression
-    for prepared statement re-execution.
-  */
-  left_table->on_expr= nullptr;
-  left_table->prep_on_expr= nullptr;
-
-  // Only the right table in a LEFT JOIN has the naming context in the grammar
-  left_table->on_context= nullptr;
 }
 
 
@@ -20675,17 +20661,8 @@ simplify_joins(JOIN *join, List<TABLE_LIST> *join_list, COND *conds, bool in_sj)
         {
           DBUG_ASSERT(expr);
 
-          /*
-            Preserve our ON expression, and if we're a FULL JOIN,
-            then preserve our partner's ON expression too.
-          */
           table->on_expr= expr;
           table->prep_on_expr= expr->copy_andor_structure(join->thd);
-          if (table->outer_join & JOIN_TYPE_FULL)
-          {
-            table->foj_partner->on_expr= expr;
-            table->foj_partner->prep_on_expr= table->prep_on_expr;
-          }
         }
       }
       conds= simplify_nested_join(join, table, conds, in_sj,
