@@ -2147,6 +2147,332 @@ v1	v2
 NULL	2
 NULL	NULL
 drop table t1, t2;
+# Vector index on the right side of FULL JOIN.  The vector index
+# does not affect FULL JOIN semantics, but the right table now
+# carries an hlindex object; this confirms the rowid weedout
+# and null-complement pass still work when it does.  Three rows
+# are expected: one left-only (1, NULL, NULL), one match
+# (2, 2, [1,0]), one right-only (NULL, 3, [2,0]).
+create table t1 (a int);
+insert into t1 values (1), (2);
+create table t2 (id int, v vector(2) not null, vector(v));
+insert into t2 values (2, vec_fromtext('[1,0]')),
+(3, vec_fromtext('[2,0]'));
+select t1.a as a1, t2.id as id2, vec_totext(t2.v) as v2
+from t1 full join t2 on t1.a = t2.id;
+a1	id2	v2
+1	NULL	NULL
+2	2	[1,0]
+NULL	3	[2,0]
+select t1.a as a1, t2.id as id2, vec_totext(t2.v) as v2
+from t1 left join t2 on t1.a = t2.id
+union
+select t1.a as a1, t2.id as id2, vec_totext(t2.v) as v2
+from t1 right join t2 on t1.a = t2.id;
+a1	id2	v2
+1	NULL	NULL
+2	2	[1,0]
+NULL	3	[2,0]
+drop table t1, t2;
+# Vector indexes on both sides of FULL JOIN.  Three rows are
+# expected: one left-only (1, [1,0], NULL, NULL), one match
+# (2, [2,0], 2, [3,0]), one right-only (NULL, NULL, 3, [4,0]).
+create table t1 (id int, v vector(2) not null, vector(v));
+insert into t1 values (1, vec_fromtext('[1,0]')),
+(2, vec_fromtext('[2,0]'));
+create table t2 (id int, v vector(2) not null, vector(v));
+insert into t2 values (2, vec_fromtext('[3,0]')),
+(3, vec_fromtext('[4,0]'));
+select t1.id as id1, vec_totext(t1.v) as v1,
+t2.id as id2, vec_totext(t2.v) as v2
+from t1 full join t2 on t1.id = t2.id;
+id1	v1	id2	v2
+1	[1,0]	NULL	NULL
+2	[2,0]	2	[3,0]
+NULL	NULL	3	[4,0]
+select t1.id as id1, vec_totext(t1.v) as v1,
+t2.id as id2, vec_totext(t2.v) as v2
+from t1 left join t2 on t1.id = t2.id
+union
+select t1.id as id1, vec_totext(t1.v) as v1,
+t2.id as id2, vec_totext(t2.v) as v2
+from t1 right join t2 on t1.id = t2.id;
+id1	v1	id2	v2
+1	[1,0]	NULL	NULL
+2	[2,0]	2	[3,0]
+NULL	NULL	3	[4,0]
+drop table t1, t2;
+# There were rows missing because not all null-complements were
+# generated.
+create table t10 (a int, b int, index(a));
+create table t11 (a int, b int, index(a));
+insert into t10 select seq, seq from seq_1_to_10;
+insert into t11 select seq*2, seq*2 from seq_1_to_10;
+create table t20 (a varchar(100), b varchar(100), index(a));
+create table t21 (a varchar(100), b varchar(100), index(a));
+insert into t20 values('match','match'), ('no-match-t20', 'no-match-t20');
+insert into t21 values('match','match'), ('no-match-t21', 'no-match-t21');
+select * from (t10 full outer join t11 on t10.a=t11.a) , (t20 full outer join t21 on t20.a=t21.a);
+a	b	a	b	a	b	a	b
+1	1	NULL	NULL	NULL	NULL	no-match-t21	no-match-t21
+1	1	NULL	NULL	match	match	match	match
+1	1	NULL	NULL	no-match-t20	no-match-t20	NULL	NULL
+10	10	10	10	NULL	NULL	no-match-t21	no-match-t21
+10	10	10	10	match	match	match	match
+10	10	10	10	no-match-t20	no-match-t20	NULL	NULL
+2	2	2	2	NULL	NULL	no-match-t21	no-match-t21
+2	2	2	2	match	match	match	match
+2	2	2	2	no-match-t20	no-match-t20	NULL	NULL
+3	3	NULL	NULL	NULL	NULL	no-match-t21	no-match-t21
+3	3	NULL	NULL	match	match	match	match
+3	3	NULL	NULL	no-match-t20	no-match-t20	NULL	NULL
+4	4	4	4	NULL	NULL	no-match-t21	no-match-t21
+4	4	4	4	match	match	match	match
+4	4	4	4	no-match-t20	no-match-t20	NULL	NULL
+5	5	NULL	NULL	NULL	NULL	no-match-t21	no-match-t21
+5	5	NULL	NULL	match	match	match	match
+5	5	NULL	NULL	no-match-t20	no-match-t20	NULL	NULL
+6	6	6	6	NULL	NULL	no-match-t21	no-match-t21
+6	6	6	6	match	match	match	match
+6	6	6	6	no-match-t20	no-match-t20	NULL	NULL
+7	7	NULL	NULL	NULL	NULL	no-match-t21	no-match-t21
+7	7	NULL	NULL	match	match	match	match
+7	7	NULL	NULL	no-match-t20	no-match-t20	NULL	NULL
+8	8	8	8	NULL	NULL	no-match-t21	no-match-t21
+8	8	8	8	match	match	match	match
+8	8	8	8	no-match-t20	no-match-t20	NULL	NULL
+9	9	NULL	NULL	NULL	NULL	no-match-t21	no-match-t21
+9	9	NULL	NULL	match	match	match	match
+9	9	NULL	NULL	no-match-t20	no-match-t20	NULL	NULL
+NULL	NULL	12	12	NULL	NULL	no-match-t21	no-match-t21
+NULL	NULL	12	12	match	match	match	match
+NULL	NULL	12	12	no-match-t20	no-match-t20	NULL	NULL
+NULL	NULL	14	14	NULL	NULL	no-match-t21	no-match-t21
+NULL	NULL	14	14	match	match	match	match
+NULL	NULL	14	14	no-match-t20	no-match-t20	NULL	NULL
+NULL	NULL	16	16	NULL	NULL	no-match-t21	no-match-t21
+NULL	NULL	16	16	match	match	match	match
+NULL	NULL	16	16	no-match-t20	no-match-t20	NULL	NULL
+NULL	NULL	18	18	NULL	NULL	no-match-t21	no-match-t21
+NULL	NULL	18	18	match	match	match	match
+NULL	NULL	18	18	no-match-t20	no-match-t20	NULL	NULL
+NULL	NULL	20	20	NULL	NULL	no-match-t21	no-match-t21
+NULL	NULL	20	20	match	match	match	match
+NULL	NULL	20	20	no-match-t20	no-match-t20	NULL	NULL
+# FULL JOIN tables must be contiguous but no longer must appear
+# at the start of the join order.
+create table ten(a int primary key);
+insert into ten values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+create table one_k(a int primary key);
+insert into one_k select A.a + B.a* 10 + C.a * 100 from ten A, ten B, ten C;
+create table t1 (
+a int,
+b int
+);
+create table t2 (
+a int,
+b int
+);
+insert into t1 select a, a from one_k where a between 1 and 100;
+insert into t2 select a, a from one_k where a between 95 and 195;
+select * from t1 full outer join t2 on (t1.a=t2.a and t1.b>90 and t2.b<110);
+a	b	a	b
+1	1	NULL	NULL
+10	10	NULL	NULL
+100	100	100	100
+11	11	NULL	NULL
+12	12	NULL	NULL
+13	13	NULL	NULL
+14	14	NULL	NULL
+15	15	NULL	NULL
+16	16	NULL	NULL
+17	17	NULL	NULL
+18	18	NULL	NULL
+19	19	NULL	NULL
+2	2	NULL	NULL
+20	20	NULL	NULL
+21	21	NULL	NULL
+22	22	NULL	NULL
+23	23	NULL	NULL
+24	24	NULL	NULL
+25	25	NULL	NULL
+26	26	NULL	NULL
+27	27	NULL	NULL
+28	28	NULL	NULL
+29	29	NULL	NULL
+3	3	NULL	NULL
+30	30	NULL	NULL
+31	31	NULL	NULL
+32	32	NULL	NULL
+33	33	NULL	NULL
+34	34	NULL	NULL
+35	35	NULL	NULL
+36	36	NULL	NULL
+37	37	NULL	NULL
+38	38	NULL	NULL
+39	39	NULL	NULL
+4	4	NULL	NULL
+40	40	NULL	NULL
+41	41	NULL	NULL
+42	42	NULL	NULL
+43	43	NULL	NULL
+44	44	NULL	NULL
+45	45	NULL	NULL
+46	46	NULL	NULL
+47	47	NULL	NULL
+48	48	NULL	NULL
+49	49	NULL	NULL
+5	5	NULL	NULL
+50	50	NULL	NULL
+51	51	NULL	NULL
+52	52	NULL	NULL
+53	53	NULL	NULL
+54	54	NULL	NULL
+55	55	NULL	NULL
+56	56	NULL	NULL
+57	57	NULL	NULL
+58	58	NULL	NULL
+59	59	NULL	NULL
+6	6	NULL	NULL
+60	60	NULL	NULL
+61	61	NULL	NULL
+62	62	NULL	NULL
+63	63	NULL	NULL
+64	64	NULL	NULL
+65	65	NULL	NULL
+66	66	NULL	NULL
+67	67	NULL	NULL
+68	68	NULL	NULL
+69	69	NULL	NULL
+7	7	NULL	NULL
+70	70	NULL	NULL
+71	71	NULL	NULL
+72	72	NULL	NULL
+73	73	NULL	NULL
+74	74	NULL	NULL
+75	75	NULL	NULL
+76	76	NULL	NULL
+77	77	NULL	NULL
+78	78	NULL	NULL
+79	79	NULL	NULL
+8	8	NULL	NULL
+80	80	NULL	NULL
+81	81	NULL	NULL
+82	82	NULL	NULL
+83	83	NULL	NULL
+84	84	NULL	NULL
+85	85	NULL	NULL
+86	86	NULL	NULL
+87	87	NULL	NULL
+88	88	NULL	NULL
+89	89	NULL	NULL
+9	9	NULL	NULL
+90	90	NULL	NULL
+91	91	NULL	NULL
+92	92	NULL	NULL
+93	93	NULL	NULL
+94	94	NULL	NULL
+95	95	95	95
+96	96	96	96
+97	97	97	97
+98	98	98	98
+99	99	99	99
+NULL	NULL	101	101
+NULL	NULL	102	102
+NULL	NULL	103	103
+NULL	NULL	104	104
+NULL	NULL	105	105
+NULL	NULL	106	106
+NULL	NULL	107	107
+NULL	NULL	108	108
+NULL	NULL	109	109
+NULL	NULL	110	110
+NULL	NULL	111	111
+NULL	NULL	112	112
+NULL	NULL	113	113
+NULL	NULL	114	114
+NULL	NULL	115	115
+NULL	NULL	116	116
+NULL	NULL	117	117
+NULL	NULL	118	118
+NULL	NULL	119	119
+NULL	NULL	120	120
+NULL	NULL	121	121
+NULL	NULL	122	122
+NULL	NULL	123	123
+NULL	NULL	124	124
+NULL	NULL	125	125
+NULL	NULL	126	126
+NULL	NULL	127	127
+NULL	NULL	128	128
+NULL	NULL	129	129
+NULL	NULL	130	130
+NULL	NULL	131	131
+NULL	NULL	132	132
+NULL	NULL	133	133
+NULL	NULL	134	134
+NULL	NULL	135	135
+NULL	NULL	136	136
+NULL	NULL	137	137
+NULL	NULL	138	138
+NULL	NULL	139	139
+NULL	NULL	140	140
+NULL	NULL	141	141
+NULL	NULL	142	142
+NULL	NULL	143	143
+NULL	NULL	144	144
+NULL	NULL	145	145
+NULL	NULL	146	146
+NULL	NULL	147	147
+NULL	NULL	148	148
+NULL	NULL	149	149
+NULL	NULL	150	150
+NULL	NULL	151	151
+NULL	NULL	152	152
+NULL	NULL	153	153
+NULL	NULL	154	154
+NULL	NULL	155	155
+NULL	NULL	156	156
+NULL	NULL	157	157
+NULL	NULL	158	158
+NULL	NULL	159	159
+NULL	NULL	160	160
+NULL	NULL	161	161
+NULL	NULL	162	162
+NULL	NULL	163	163
+NULL	NULL	164	164
+NULL	NULL	165	165
+NULL	NULL	166	166
+NULL	NULL	167	167
+NULL	NULL	168	168
+NULL	NULL	169	169
+NULL	NULL	170	170
+NULL	NULL	171	171
+NULL	NULL	172	172
+NULL	NULL	173	173
+NULL	NULL	174	174
+NULL	NULL	175	175
+NULL	NULL	176	176
+NULL	NULL	177	177
+NULL	NULL	178	178
+NULL	NULL	179	179
+NULL	NULL	180	180
+NULL	NULL	181	181
+NULL	NULL	182	182
+NULL	NULL	183	183
+NULL	NULL	184	184
+NULL	NULL	185	185
+NULL	NULL	186	186
+NULL	NULL	187	187
+NULL	NULL	188	188
+NULL	NULL	189	189
+NULL	NULL	190	190
+NULL	NULL	191	191
+NULL	NULL	192	192
+NULL	NULL	193	193
+NULL	NULL	194	194
+NULL	NULL	195	195
+drop table t10, t11, t20, t21, ten, one_k, t1, t2;
 # ========================================================
 # Section 16: Storage engines (MyISAM, Aria, mixed)
 #
@@ -2853,9 +3179,9 @@ explain select *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	
 1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	
 1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	Using where
-1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	Using where; Using join buffer (flat, BNL join)
 select *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
@@ -2889,9 +3215,9 @@ explain select /*+ join_order(t3,t1,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	
 1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	
 1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	Using where
-1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	Using where; Using join buffer (flat, BNL join)
 Warnings:
 Warning	4219	Hint JOIN_ORDER(`t3`,`t1`,`t2`) is ignored as conflicting/duplicated
 select /*+ join_order(t3,t1,t2) */ *
@@ -2910,9 +3236,9 @@ explain select /*+ join_order(t1,t3,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	
 1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	
 1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	Using where
-1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	Using where; Using join buffer (flat, BNL join)
 Warnings:
 Warning	4219	Hint JOIN_ORDER(`t1`,`t3`,`t2`) is ignored as conflicting/duplicated
 select /*+ join_order(t1,t3,t2) */ *

@@ -266,13 +266,30 @@ typedef struct st_join_table {
   bool writing_null_complements{false};
 
   /*
-    Set to true once this tab's FULL JOIN null-complement rescan has
-    finished.  Used to (a) suppress a second rescan triggered by
-    repeated end_of_records propagation in chained FULL JOIN plans,
-    and (b) make fj_null_complement_pending() report "done" rather
-    than "pending" for tabs whose rescan already ran.
+    Linked list of FULL JOIN right side JOIN_TABs whose left-side
+    null-complement generation ends at this tab.  At the end of
+    sub_select(this, 0), each target's null-complement rescan runs so
+    the rescan participates in the enclosing nested loop and
+    cross-products with any outer scope tables.  This will be NULL on
+    tabs that are not the left-most JOIN_TAB of any FULL JOIN's left
+    side.  Ordered inside-out for chained FULL JOINs so that an inner
+    FJ's rescan runs before an outer FJ's rescan and can update the
+    outer fj_dups filter through the normal forward chain.
+
+    To visit this linked list, the first element is on fj_first_target
+    and subsequent elements are on fj_next_target (see function
+    alloc_full_join_duplicate_filters).
   */
-  bool fj_null_complement_done{false};
+  struct st_join_table *fj_first_target;
+
+  /*
+    Next pointer for the fj_first_target list.  Not NULL only on FULL
+    JOIN right side JOIN_TABs that share a left-most JOIN_TAB with
+    another FULL JOIN right side JOIN_TAB (like in the case of chained
+    FULL JOINs).  Put another way, one FULL JOIN's left-most JOIN_TAB
+    may be another's right JOIN_TAB.
+  */
+  struct st_join_table *fj_next_target;
 
   TABLE         *table;        /**< pointer to table cursor */
   TABLE_LIST    *tab_list;     /**< pointer to query table, e.g. `t1` */

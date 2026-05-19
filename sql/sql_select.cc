@@ -455,13 +455,17 @@ bool dbug_user_var_equals_str(THD *thd, const char *name, const char* value)
 
 
 /*
-  Duplicate-row filter for FULL JOIN execution.
+  Duplicate Row Filter for FULL JOINs.
 
   During the first (LEFT JOIN) pass of a FULL JOIN, the filter records
   the rowids of right-side rows that were matched.  During the second
   (null-complement) pass, the filter is consulted to skip rows that
   were already emitted, so that only unmatched right-side rows produce
   NULL-complemented output.
+
+  Saved rowids are consulted at the end of each 'outer' JOIN_TAB's
+  execution to generate null-complements for the partial join (aka
+  join prefix).
 
   Internally this reuses the semi-join weedout infrastructure
   (SJ_TMP_TABLE).
@@ -549,6 +553,15 @@ public:
       return 1;
     *is_duplicate= (res == 1);
     return 0;
+  }
+
+  /*
+    Delete all recorded rows but keep the temp table allocated
+    so it can be reused.
+  */
+  void reset()
+  {
+    tbl.sj_weedout_delete_rows();
   }
 
   /*
@@ -21308,26 +21321,47 @@ compute_full_join_nest_tables(JOIN *join, SELECT_LEX *lex)
 
 
 /*
-  If any FULL JOIN nest tables in the candidate pool are still
-  unplaced, return just those tables; otherwise return 0 to indicate
-  no restriction.
+  Keep the FULL JOIN block contiguous in the join order.  Once any
+  FULL JOIN table has been placed, every subsequent table must also be
+  a FULL JOIN table until all FULL JOIN tables are placed.  Other
+  tables may appear before or after the block of FULL JOIN tables.
 
-  The null-complement algorithm requires FULL JOIN tables to be
-  adjacent in the execution order.  Allowing an outside table to be
-  interleaved between FULL JOIN partners would break the algorithm.
+  Returns the set of remaining FULL JOIN tables, otherwise 0 (no
+  restriction).
 */
 
 static table_map
 restrict_to_unplaced_fj_tables(JOIN *join, uint idx, table_map pool)
 {
+  // Nothing to place.
   if (!join->full_join_nest_tables)
     return 0;
 
+  /*
+    Const tables come first in the join order, skip those as there
+    cannot be FULL JOIN tables that are constant (const table
+    optimization for FULL JOIN tables disabled).
+   */
+  table_map placed_fj= 0;
+  for (uint i= join->const_tables; i < idx; i++)
+    placed_fj|= join->positions[i].table->table->map &
+                join->full_join_nest_tables;
+
+  // Haven't entered the FULL JOIN block yet, no restriction.
+  if (!placed_fj)
+    return 0;
+
+  // Already finished the FULL JOIN block, no restriction.
+  table_map remaining_fj= join->full_join_nest_tables & ~placed_fj;
+  if (!remaining_fj)
+    return 0;
+
+  // Inside the block, only the remaining FULL JOIN tables are allowed.
   table_map remaining= 0;
   for (uint i= idx; i < join->table_count; i++)
     remaining|= join->best_ref[i]->table->map;
 
-  return join->full_join_nest_tables & remaining & pool;
+  return remaining_fj & remaining & pool;
 }
 
 
@@ -21446,6 +21480,10 @@ table_map JOIN::get_allowed_nj_tables(uint idx)
     ? emb_sjm_nest->nested_join->direct_children_map
     : allowed_top_level_tables;
 
+  /*
+    If there are FULL JOIN tables present, then this function yields a
+    table_map keeping the FULL JOIN tables contiguous in the join order.
+  */
   if (table_map fj_only= restrict_to_unplaced_fj_tables(this, idx, pool))
     return fj_only;
 
@@ -24918,28 +24956,158 @@ Next_select_func setup_end_select_func(JOIN *join)
 */
 
 /*
-  Allocate a full_join_duplicate_filter for each right-side FULL JOIN
-  table in the top-level join-tab range [start_tab, start_tab+count).
+  Helper function called by find_left_most_join_tab exclusively,
+  see that function's block comment for context before reading
+  this function.
 
-  The filter records right-side rowids matched during the LEFT JOIN
+  Test whether the TABLE_LIST dart is the same as target or
+  appears anywhere underneath it.
+*/
+static bool table_on_full_join_left_side(TABLE_LIST *target,
+                                         TABLE_LIST *dart)
+{
+  // We found it.
+  if (target == dart)
+    return true;
+
+  /*
+    If we didn't find it and target isn't a nested join, then
+    whatever candidate we last tested has to be it (caller saved
+    the last candidate).
+  */
+  if (!target->nested_join)
+    return false;
+
+  /*
+    Walk the join nest looking for the table that will correspond
+    to the left-most JOIN_TAB in the join order.
+   */
+  List_iterator<TABLE_LIST> li(target->nested_join->join_list);
+  TABLE_LIST *child;
+  while ((child= li++))
+  {
+    // Obviously we need to recurse on the tables in the join nest.
+    if (table_on_full_join_left_side(child, dart))
+      return true;  // found it
+  }
+
+  // Ultimately didn't find it.
+  return false;
+}
+
+
+/*
+  Locate the left-most JOIN_TAB corresponding to the given right_tab.
+  Because full_join_nest_tables forces all tables of a FULL JOIN nest
+  to be placed contiguously, the FULL JOIN's left side tables are in a
+  contiguous range immediately to the left of right_tab.  Walk
+  backward from right_tab-1, collecting tabs in the left side, but
+  stopping at the first tab outside it.  The last collected tab is the
+  left-most JOIN_TAB.
+
+  One might ask "why not just look at foj_partner" but that ignores
+  the case when the left side is a join nest (or nest of nest, etc)
+  wherein there may be many tables before we get to the left-most
+  JOIN_TAB in the join order.
+*/
+static JOIN_TAB *find_left_most_join_tab(JOIN *join, JOIN_TAB *right_tab)
+{
+  DBUG_ASSERT(right_tab->tab_list->outer_join &
+              (JOIN_TYPE_FULL|JOIN_TYPE_RIGHT));
+
+  TABLE_LIST *left_side= right_tab->tab_list->foj_partner;
+  DBUG_ASSERT(left_side);
+  int r_pos= right_tab - join->join_tab;
+  DBUG_ASSERT(r_pos >= 0);
+  JOIN_TAB *leftmost_jt= nullptr;
+
+  /*
+    Each JOIN_TAB preceding right_tab is a candidate left-most
+    JOIN_TAB, so walk them starting from the first JOIN_TAB to the
+    left of right_tab and going backwards.
+  */
+  for (int i= r_pos - 1; i >= (int)join->const_tables; --i)
+  {
+    /*
+      tab_list isn't a list, it's just the TABLE_LIST associated with
+      the i'th JOIN_TAB.  Check to see if it is in the left side of
+      the FULL JOIN which would mean that we (might) have found the
+      left-most JOIN_TAB for the current FULL JOIN (but we will keep
+      looking until we're sure).  This will return false when we've
+      walked past the left-most JOIN_TAB.
+    */
+    if (!table_on_full_join_left_side(left_side, join->join_tab[i].tab_list))
+      break;
+
+    /*
+      join->join_tab[i] is the current candidate for left-most, but
+      keep going until we exhaust candidates, which happens when
+      we break (above).
+    */
+    leftmost_jt= &join->join_tab[i];
+  }
+
+  return leftmost_jt;
+}
+
+
+/*
+  Allocate a full_join_duplicate_filter for each right side FULL JOIN
+  table in the toplevel JOIN_TAB range [start_tab, start_tab+count).
+
+  The filter records right side rowids matched during the LEFT JOIN
   pass so the null-complement rescan can skip them.  Only base tables
   are supported on the right side of a FULL JOIN, but a query may
-  contain multiple (possibly nested) FULL JOINs, so each right-side
-  tab gets its own filter.
+  contain multiple (possibly nested) FULL JOINs, so each right side
+  JOIN_TAB gets its own filter.
+
+  After allocating the filters, link each FULL JOIN right JOIN_TAB
+  into its corresponding left-most JOIN_TAB's fj_first_target list.
+  Append at the tail so chained FULL JOINs land in inside-out order:
+  the inner FULL JOIN's right JOIN_TAB runs its rescan before the
+  outer FULL JOIN's right JOIN_TAB, so the inner rescan's forwarded
+  rows can update the outer fj_dups filter through the normal forward
+  chain before the outer rescan reads it.
 
   Returns true on allocation failure (error already reported).
 */
 
-static bool alloc_full_join_duplicate_filters(JOIN *join, uint count)
+static bool alloc_full_join_duplicate_filters(JOIN *join, JOIN_TAB *start_tab,
+                                              uint count)
 {
+  // No FULL JOINs in this query, do nothing.
   if (!join->thd->lex->full_join_count)
     return false;
 
-  JOIN_TAB* start_tab= join->join_tab;
+  // First, initialize all pointers to NULL...
   for (uint i= 0; i < count; ++i)
   {
     start_tab[i].fj_dups= nullptr;
-    start_tab[i].fj_null_complement_done= false;
+    start_tab[i].fj_first_target= nullptr;
+    start_tab[i].fj_next_target= nullptr;
+  }
+
+  // ...then, setup the duplicate filters.
+  for (uint i= 0; i < count; ++i)
+  {
+    /*
+      Descend into a particular bush_child (most likely a materialized
+      semijoin) so its FULL JOIN tables get their own fj_dups filters
+      (well, so at least the right sides of any FULL JOINs get them, see
+      down below).
+    */
+    if (start_tab[i].bush_children)
+    {
+      JOIN_TAB *bush_start= start_tab[i].bush_children->start;
+      uint bush_count= (uint)(start_tab[i].bush_children->end - bush_start);
+      if (alloc_full_join_duplicate_filters(join, bush_start, bush_count))
+        return true;
+    }
+
+    /*
+      Right side of FULL JOINs only beyond this point.  All the
+      bookkeeping stuff goes on the right side of the FULL JOIN.
+    */
     if (!(start_tab[i].tab_list->outer_join & JOIN_TYPE_FULL) ||
         !(start_tab[i].tab_list->outer_join & JOIN_TYPE_RIGHT))
       continue;
@@ -24953,6 +25121,32 @@ static bool alloc_full_join_duplicate_filters(JOIN *join, uint count)
     if (!fj_dups || fj_dups->init(join->thd, &start_tab[i]))
       return true;
     start_tab[i].fj_dups= fj_dups;
+
+    /*
+      Link this JOIN_TAB (which must be on the right side of a FULL
+      JOIN) into the target list of the corresponding left-most
+      JOIN_TAB.  The rescan that emits null-complement rows from the
+      right side of this FULL JOIN will fire at the end of that left
+      JOIN_TAB's sub_select call.
+
+      Append at the tail of the list rather than at the head.
+      The enclosing loop walks JOIN_TABs in order, so for a
+      chained FULL JOIN like (A FJ B) FJ C the inner JOIN_TAB B lands
+      on A's list before the C.  Order
+      matters because the inner rescan's emitted rows must reach
+      the R's fj_dups filter through next_select before
+      the rescan reads that filter.  If we prepended, the
+      outer rescan would run first and emit already matched
+      right side rows again as unmatched.
+    */
+    JOIN_TAB *leftmost_jt= find_left_most_join_tab(join, &start_tab[i]);
+    if (!leftmost_jt)
+      leftmost_jt= &start_tab[i];
+    DBUG_ASSERT(leftmost_jt);
+    JOIN_TAB **slot= &leftmost_jt->fj_first_target;
+    while (*slot) // walk to the end of the linked list...
+      slot= &(*slot)->fj_next_target;
+    *slot= &start_tab[i]; // ...and stick start_tab[i] at the end.
   }
   return false;
 }
@@ -24963,14 +25157,25 @@ static bool alloc_full_join_duplicate_filters(JOIN *join, uint count)
   allocated by alloc_full_join_duplicate_filters.
 */
 
-static void free_full_join_duplicate_filters(JOIN *join, uint count)
+static void free_full_join_duplicate_filters(JOIN *join, JOIN_TAB *start_tab,
+                                             uint count)
 {
   if (!join->thd->lex->full_join_count)
     return;
 
-  JOIN_TAB* start_tab= join->join_tab;
   for (uint i= 0; i < count; ++i)
   {
+    /*
+      Mirror alloc's descent into a materialized semijoin so filters
+      set up inside the bush are released, too.
+    */
+    if (start_tab[i].bush_children)
+    {
+      JOIN_TAB *bush_start= start_tab[i].bush_children->start;
+      uint bush_count= (uint)(start_tab[i].bush_children->end - bush_start);
+      free_full_join_duplicate_filters(join, bush_start, bush_count);
+    }
+
     if (!(start_tab[i].tab_list->outer_join & JOIN_TYPE_FULL) ||
         start_tab[i].fj_dups == nullptr)
       continue;
@@ -25109,7 +25314,8 @@ do_select(JOIN *join, Procedure *procedure)
     JOIN_TAB *start_tab= join->join_tab +
                         (join->tables_list ? join->const_tables : 0);
 
-    if (alloc_full_join_duplicate_filters(join, top_level_tables))
+    if (alloc_full_join_duplicate_filters(join, join->join_tab,
+                                          top_level_tables))
       DBUG_RETURN(-1);
 
     if (join->outer_ref_cond && !join->outer_ref_cond->val_bool())
@@ -25119,7 +25325,7 @@ do_select(JOIN *join, Procedure *procedure)
     if (error >= NESTED_LOOP_OK && likely(join->thd->killed != ABORT_QUERY))
       error= join->first_select(join,start_tab,1);
 
-    free_full_join_duplicate_filters(join, top_level_tables);
+    free_full_join_duplicate_filters(join, join->join_tab, top_level_tables);
   }
 
   join->thd->limit_found_rows= join->send_records - join->duplicate_rows;
@@ -25519,12 +25725,7 @@ sub_select_cache(JOIN *join, JOIN_TAB *join_tab, bool end_of_records)
   from the now-nullified left side and return zero rows).  The pushed
   SQL_SELECT and on_precond are cleared for the rescan and restored
   afterwards so that subsequent executions (prepared statement
-  re-execution, correlated subquery iterations) see the original
-  access method.
-
-  Runs at end_of_records, so it is safe to restore without restarting
-  the handler scan.  Caller guarantees that join_tab is the RIGHT side
-  of a FULL JOIN and writing_null_complements is currently false.
+  re-execution, correlated subquery iterations) see the originals.
 */
 
 static enum_nested_loop_state
@@ -25542,9 +25743,6 @@ run_fj_null_complement_pass(JOIN *join, JOIN_TAB *join_tab)
   const int saved_keyread= join_tab->table->file->ha_end_active_keyread();
   if (join_tab->type == JT_FT)
     join_tab->table->file->ha_ft_end();
-  else if (join_tab->table->hlindex &&
-           join_tab->table->hlindex->context)
-    join_tab->table->hlindex_read_end();
   else
     join_tab->table->file->ha_index_or_rnd_end();
 
@@ -25557,15 +25755,12 @@ run_fj_null_complement_pass(JOIN *join, JOIN_TAB *join_tab)
 
   // full scan of right table and null-complement generation
   enum_nested_loop_state nls= sub_select(join, join_tab, 0);
-  if (nls >= NESTED_LOOP_OK)
-    nls= sub_select(join, join_tab, 1);
 
   // restore the saved-off state.
   join_tab->read_first_record= saved_read_first;
   join_tab->read_record= saved_read_record;
   join_tab->select= saved_select;
   join_tab->writing_null_complements= false;
-  join_tab->fj_null_complement_done= true;
   join_tab->on_precond= saved_on_precond;
   /*
     join_init_read_record (via join_tab->read_first_record above)
@@ -25582,6 +25777,58 @@ run_fj_null_complement_pass(JOIN *join, JOIN_TAB *join_tab)
   if (nls == NESTED_LOOP_NO_MORE_ROWS)
     nls= NESTED_LOOP_OK;
   return nls;
+}
+
+
+static void
+reset_fj_duplicate_filters(JOIN_TAB *join_tab)
+{
+  /*
+    If this tab is the left-most JOIN_TAB for one or more FULL JOIN
+    right side JOIN_TABs, then reset their duplicate filters so that
+    each fresh iteration of this tab accumulates a clean set of
+    matched right side rowids.  The matching null-complement rescans
+    fire at the end of sub_select for this JOIN_TAB, below.
+
+    Skip when this tab is itself in the middle of a null-complement
+    rescan (writing_null_complements is true).  That path is
+    entered from run_fj_null_complement_pass and is not a fresh
+    outer scope iteration; resetting fj_dups here would wipe out
+    the matches the outer scan accumulated.
+  */
+  if (!join_tab->writing_null_complements)
+  {
+    for (JOIN_TAB *target= join_tab->fj_first_target;
+         target;
+         target= target->fj_next_target)
+    {
+      target->fj_dups->reset();
+    }
+  }
+}
+
+
+static enum_nested_loop_state
+run_fj_null_complement_passes(JOIN *join, JOIN_TAB *join_tab)
+{
+  /*
+    At the end of this JOIN_TAB's scan, run the FULL JOIN null-
+    complement rescan for each right side tab whose left-most JOIN_TAB
+    is this tab.
+  */
+  enum_nested_loop_state rc= NESTED_LOOP_OK;
+  if (!join_tab->writing_null_complements)
+  {
+    for (JOIN_TAB *target= join_tab->fj_first_target;
+         target;
+         target= target->fj_next_target)
+    {
+      rc= run_fj_null_complement_pass(join, target);
+      if (rc != NESTED_LOOP_OK)
+        break;
+    }
+  }
+  return rc;
 }
 
 
@@ -25614,42 +25861,13 @@ sub_select(JOIN *join,JOIN_TAB *join_tab,bool end_of_records)
 
   if (end_of_records)
   {
-    enum_nested_loop_state nls= NESTED_LOOP_OK;
-
-    // eor means 'end of records'
-    bool eor_forwarded_by_rescan= false;
-
-    /*
-      For chained FULL JOINs (e.g. A FJ B FJ C), the inner FJ's
-      null-complement rescan can produce rows that match the outer
-      FJ's right side.  Those matches must be recorded in the outer
-      fj_dups filter before the outer's own rescan runs, otherwise
-      the outer re-emits an already-matched right-side row as
-      "unmatched".  Therefore, run *this tab's rescan first, and only
-      then propagate end_of_records deeper (which triggers the next
-      tab's rescan, now with updated fj_dups state).  The
-      fj_null_complement_done flag prevents a subsequent EOR from
-      re-triggering this same rescan.
-
-      run_fj_null_complement_pass internally calls
-      sub_select(self, true) which already forwards EOR down the
-      chain, so we must not forward it a second time below.
-    */
-    if (join_tab->fj_dups &&  // is the right side of a FULL JOIN
-        !join_tab->writing_null_complements &&
-        !join_tab->fj_null_complement_done &&
-        (join_tab->tab_list->outer_join & JOIN_TYPE_FULL) &&
-        (join_tab->tab_list->outer_join & JOIN_TYPE_RIGHT))
-    {
-      nls= run_fj_null_complement_pass(join, join_tab);
-      eor_forwarded_by_rescan= true;
-    }
-
-    if (!eor_forwarded_by_rescan && nls >= NESTED_LOOP_OK)
-      nls= (*join_tab->next_select)(join,join_tab+1,end_of_records);
-
+    enum_nested_loop_state nls=
+      (*join_tab->next_select)(join,join_tab+1,end_of_records);
     DBUG_RETURN(nls);
   }
+
+  reset_fj_duplicate_filters(join_tab);
+
   join_tab->tracker->r_scans++;
 
   rc= NESTED_LOOP_OK;
@@ -25773,6 +25991,9 @@ sub_select(JOIN *join,JOIN_TAB *join_tab,bool end_of_records)
     else
       rc= NESTED_LOOP_OK;
   }
+
+  if (rc == NESTED_LOOP_OK)
+    rc= run_fj_null_complement_passes(join, join_tab);
 
   if (join_tab->cached_pfs_batch_update)
     join_tab->table->file->end_psi_batch_mode();
