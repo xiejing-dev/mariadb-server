@@ -1207,31 +1207,20 @@ innobase_commit_by_xid(
 	XID*		xid);		/*!< in: X/Open XA transaction
 					identification */
 #ifndef EMBEDDED_LIBRARY
-/*******************************************************************//**
-This function is used to rollback one X/Open XA distributed transaction
-which is in the prepared state asynchronously.
+/**
+   In binlog recovery, persistently mark that a transaction will be
+   rolled back.
 
-It only set the transaction's status to ACTIVE and persist the status.
-The transaction will be rolled back by background rollback thread.
-
-@return 0 or error number
+   @param xid  Internal MySQLXid identificier
+   @return 0 or error number
 */
-static
-int
-innobase_recover_rollback_by_xid(
-/*===================*/
-	const XID*	xid);		/*!< in: X/Open XA transaction
-					identification */
-/*******************************************************************//**
-  This function is called after tc log is opened(typically binlog recovery)
-  has done. It starts rollback thread to rollback the transactions
-  have been changed from PREPARED to ACTIVE.
-
-  @return 0 or error number
+static int innobase_recover_rollback_by_xid(const XID *xid) noexcept;
+/**
+   Signal that the binlog based recovery is completed and request
+   the completion of the rollback of any transactions on which
+   innobase_recover_rollback_by_xid() was invoked.
 */
-static
-void
-innobase_tc_log_recovery_done();
+static void innobase_tc_log_recovery_done() noexcept;
 #endif
 
 
@@ -2796,7 +2785,6 @@ static int innobase_close_connection(THD *thd) noexcept
 */
 static int innobase_rollback_by_xid(XID *xid) noexcept
 {
-  DBUG_EXECUTE_IF("innobase_xa_fail", return XAER_RMFAIL;);
   if (high_level_read_only || recv_sys.rpo)
     return XAER_RMFAIL;
   if (trx_t *trx= trx_get_trx_by_xid(xid))
@@ -17411,9 +17399,6 @@ innobase_commit_by_xid(
 /*===================*/
 	XID*		xid)	/*!< in: X/Open XA transaction identification */
 {
-	DBUG_EXECUTE_IF("innobase_xa_fail",
-			return XAER_RMFAIL;);
-
 	if (high_level_read_only || recv_sys.rpo) {
 		return(XAER_RMFAIL);
 	}
@@ -17432,22 +17417,9 @@ innobase_commit_by_xid(
 }
 
 #ifndef EMBEDDED_LIBRARY
-/**
-  This function is used to rollback one X/Open XA distributed transaction
-  which is in the prepared state asynchronously.
-
-  It only set the transaction's status to ACTIVE and persist the status.
-  The transaction will be rolled back by background rollback thread.
-
-  @param xid X/Open XA transaction identification
-
-  @return 0 or error number
-*/
-static int innobase_recover_rollback_by_xid(const XID *xid)
+static int innobase_recover_rollback_by_xid(const XID *xid) noexcept
 {
-  DBUG_EXECUTE_IF("innobase_xa_fail", return XAER_RMFAIL;);
-
-  if (high_level_read_only)
+  if (high_level_read_only || recv_sys.rpo)
     return XAER_RMFAIL;
 
   /*
@@ -17489,7 +17461,7 @@ static int innobase_recover_rollback_by_xid(const XID *xid)
   return 0;
 }
 
-static void innobase_tc_log_recovery_done()
+static void innobase_tc_log_recovery_done() noexcept
 {
   if (high_level_read_only || recv_sys.rpo)
     return;
