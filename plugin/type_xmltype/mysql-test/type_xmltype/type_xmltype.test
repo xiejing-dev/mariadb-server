@@ -289,4 +289,17 @@ SET sql_mode= default;
 DROP PROCEDURE sp;
 DROP TABLE t;
 
+--echo #
+--echo # MDEV-39653 AddressSanitizer: heap-use-after-free in my_mb_wc_latin1/../Field_xmltype::store after invalid xml.
+--echo #
+
+CREATE TABLE t1 (i INT);
+INSERT INTO t1 VALUES (1),(2),(3),(4);
+ 
+CREATE TABLE t2 (x XMLTYPE not null);
+--error ER_WRONG_VALUE
+INSERT IGNORE INTO t2 SELECT i FROM t1;
+
+DROP TABLE t1, t2;
+
 --echo # End of 12.3 tests
