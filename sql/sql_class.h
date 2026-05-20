@@ -8414,7 +8414,7 @@ public:
   bool eq_routine_name(const Database_qualified_name *other) const
   {
 
-    return m_db.streq(other->m_db) &&
+    return m_db.streq_safe(other->m_db) &&
            Lex_ident_routine(m_name).streq(other->m_name);
   }
   /*
