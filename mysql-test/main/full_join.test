@@ -1347,6 +1347,21 @@ insert into t20 values('match','match'), ('no-match-t20', 'no-match-t20');
 insert into t21 values('match','match'), ('no-match-t21', 'no-match-t21');
 --sorted_result
 select * from (t10 full outer join t11 on t10.a=t11.a) , (t20 full outer join t21 on t20.a=t21.a);
+--echo # Join order under straight_join with FULL JOIN
+create table two (c int);
+insert into two values (1),(2);
+explain select * from two, (t10 full outer join t11 on t10.a=t11.a);
+--sorted_result
+select * from two, (t10 full outer join t11 on t10.a=t11.a);
+explain select * from (t10 full outer join t11 on t10.a=t11.a), two;
+--sorted_result
+select * from (t10 full outer join t11 on t10.a=t11.a), two;
+explain select straight_join * from two, (t10 full outer join t11 on t10.a=t11.a);
+--sorted_result
+select straight_join * from two, (t10 full outer join t11 on t10.a=t11.a);
+explain select straight_join * from (t10 full outer join t11 on t10.a=t11.a), two;
+--sorted_result
+select straight_join * from (t10 full outer join t11 on t10.a=t11.a), two;
 
 --echo # FULL JOIN tables must be contiguous but no longer must appear
 --echo # at the start of the join order.
@@ -1369,7 +1384,7 @@ insert into t2 select a, a from one_k where a between 95 and 195;
 --sorted_result
 select * from t1 full outer join t2 on (t1.a=t2.a and t1.b>90 and t2.b<110);
 
-drop table t10, t11, t20, t21, ten, one_k, t1, t2;
+drop table t10, t11, t20, t21, two, ten, one_k, t1, t2;
 
 --echo # ========================================================
 --echo # Section 16: Storage engines (MyISAM, Aria, mixed)
@@ -1731,6 +1746,88 @@ where coalesce(t3L.k, t3R.k) between 1 and 5
     select coalesce(l2.k, t3M.k) from t3L l2 right join t3M on l2.k = t3M.k
   );
 
+--echo # STRAIGHT_JOIN combined with FULL JOIN.  Each FULL JOIN pair
+--echo # must stay contiguous in the join order so its null-complement
+--echo # rescan can fire at the right partner with the LEFT JOIN pass
+--echo # complete, but non FULL JOIN tables may appear before, after,
+--echo # or between distinct FULL JOIN pairs.  STRAIGHT_JOIN cannot
+--echo # violate per-pair contiguity because the SQL grammar puts each
+--echo # pair's L and R syntactically adjacent in the FROM clause.
+
+--echo # FULL JOIN tables first.
+explain
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L full join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4;
+--sorted_result
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L full join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4;
+--sorted_result
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L left join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4
+union
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L right join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4;
+
+--echo # Non FULL JOIN table first.
+explain
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L full join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4;
+--sorted_result
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L full join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4;
+--sorted_result
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L left join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4
+union
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L right join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4;
+
+--echo # Two distinct FULL JOIN pairs with a non FULL JOIN table
+--echo # between them, under STRAIGHT_JOIN.  Each pair is internally
+--echo # contiguous so STRAIGHT_JOIN is honored and the result matches
+--echo # the cross of the two pairs' LEFT/RIGHT UNION oracle.
+create table t3N (k int);
+insert into t3N values (1), (3), (5), (7);
+explain
+select straight_join
+       coalesce(t3L.k, t3R.k) as kLR, t3O.x,
+       coalesce(t3M.k, t3N.k) as kMN
+from (t3L full join t3R on t3L.k = t3R.k),
+     t3O,
+     (t3M full join t3N on t3M.k = t3N.k)
+where t3O.x between 3 and 4;
+--sorted_result
+select straight_join
+       coalesce(t3L.k, t3R.k) as kLR, t3O.x,
+       coalesce(t3M.k, t3N.k) as kMN
+from (t3L full join t3R on t3L.k = t3R.k),
+     t3O,
+     (t3M full join t3N on t3M.k = t3N.k)
+where t3O.x between 3 and 4;
+--sorted_result
+select lr.kLR, t3O.x, mn.kMN
+from (select coalesce(t3L.k, t3R.k) as kLR
+        from t3L left join t3R on t3L.k = t3R.k
+      union
+      select coalesce(t3L.k, t3R.k)
+        from t3L right join t3R on t3L.k = t3R.k) lr,
+     t3O,
+     (select coalesce(t3M.k, t3N.k) as kMN
+        from t3M left join t3N on t3M.k = t3N.k
+      union
+      select coalesce(t3M.k, t3N.k)
+        from t3M right join t3N on t3M.k = t3N.k) mn
+where t3O.x between 3 and 4;
+drop table t3N;
+
 drop table t3O, t3L, t3R, t3M;
 
 
@@ -1866,13 +1963,14 @@ select * from t3 right join (t1 full join t2 on t1.a=t2.b)
 
 drop table t1, t2, t3;
 
---echo # FULL JOIN tables must be placed first in the join order because
---echo # the null complement pass only works in phase 2 when FULL JOIN
---echo # is "to the left" (outer) of other JOINs.  A JOIN_ORDER() hint
---echo # that forces a non-FULL JOIN table before the FULL JOIN tables
---echo # is illegal (expecting to relax this in phase 3).
---echo # Without the fix, this asserted in best_extension_by_limited_search
---echo # but now the hint's ignored for an invalid JOIN order (with a warning).
+--echo # JOIN_ORDER hints around a FULL JOIN.  The partners of each
+--echo # FULL JOIN must remain contiguous in the join order so the
+--echo # null-complement pass can fire at the right partner with the
+--echo # LEFT JOIN pass complete; outside tables may sit before or
+--echo # after the pair.  A hint that names an outside table between
+--echo # the two partners is rejected with a conflict warning; a hint
+--echo # that names an outside table before (or after) the pair is
+--echo # honored.
 create table t1 (a int);
 insert into t1 values (2), (1), (7), (1), (2);
 create table t2 (b int);
@@ -1880,7 +1978,7 @@ insert into t2 values (4), (5), (9), (4), (1), (7);
 create table t3 (c int);
 insert into t3 values (3), (1), (3), (9);
 --echo # No hint, base case, should match other results.
-explain select *
+explain extended select *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
   on (t3.c=t1.a or t2.b=5);
 --sorted_result
@@ -1888,17 +1986,8 @@ select *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
   on (t3.c=t1.a or t2.b=5);
 
---echo # "Trivial" hint, it matches the expected join order (is allowed)
-explain select /*+ join_order(t1,t2,t3) */ *
-from t3 inner join (t1 full join t2 on t1.a=t2.b)
-  on (t3.c=t1.a or t2.b=5);
---sorted_result
-select /*+ join_order(t1,t2,t3) */ *
-from t3 inner join (t1 full join t2 on t1.a=t2.b)
-  on (t3.c=t1.a or t2.b=5);
-
---echo # JOIN_ORDER hint with combinations
-explain select /*+ join_order(t3,t1,t2) */ *
+--echo # Outside table before the FULL JOIN pair, honored.
+explain extended select /*+ join_order(t3,t1,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
   on (t3.c=t1.a or t2.b=5);
 --sorted_result
@@ -1906,12 +1995,175 @@ select /*+ join_order(t3,t1,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
   on (t3.c=t1.a or t2.b=5);
 
-explain select /*+ join_order(t1,t3,t2) */ *
+--echo # Outside table after the FULL JOIN pair, honored.
+explain extended select /*+ join_order(t1,t2,t3) */ *
+from t3 inner join (t1 full join t2 on t1.a=t2.b)
+  on (t3.c=t1.a or t2.b=5);
+--sorted_result
+select /*+ join_order(t1,t2,t3) */ *
+from t3 inner join (t1 full join t2 on t1.a=t2.b)
+  on (t3.c=t1.a or t2.b=5);
+
+--echo # Outside table between the two FULL JOIN partners, rejected.
+explain extended select /*+ join_order(t1,t3,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
   on (t3.c=t1.a or t2.b=5);
 --sorted_result
 select /*+ join_order(t1,t3,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
+  on (t3.c=t1.a or t2.b=5);
+drop table t1, t2, t3;
+
+--echo # ((t1, t2) FULL JOIN t3) INNER JOIN t4 with the FULL JOIN on
+--echo # the left side of the INNER JOIN, the configuration phase 2
+--echo # supports.  The FULL JOIN block covers three tables; t4 sits
+--echo # outside and may go before or after the block but never
+--echo # between any two of t1, t2, t3.  The FULL JOIN ON
+--echo # condition is a simple equi-join so the query translates
+--echo # to PostgreSQL; the INNER JOIN ON is disjunctive so the
+--echo # FULL JOIN is not eligible for the LEFT/RIGHT/INNER
+--echo # rewrite and survives into the join optimizer.
+create table t1 (a int);
+insert into t1 values (1), (2);
+create table t2 (b int);
+insert into t2 values (3), (4);
+create table t3 (c int);
+insert into t3 values (1), (5);
+create table t4 (d int);
+insert into t4 values (1), (5);
+
+--echo # No hint, base case.
+explain extended select *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+--sorted_result
+select *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+
+--echo # Outside table before the FULL JOIN block, honored.
+explain extended select /*+ join_order(t4,t1,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+--sorted_result
+select /*+ join_order(t4,t1,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+
+--echo # Outside table after the FULL JOIN block, honored.
+explain extended select /*+ join_order(t1,t2,t3,t4) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+--sorted_result
+select /*+ join_order(t1,t2,t3,t4) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+
+--echo # Swap t1 and t2 within the (t1, t2) nest while keeping
+--echo # the FULL JOIN block contiguous, honored.
+explain extended select /*+ join_order(t4,t2,t1,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+--sorted_result
+select /*+ join_order(t4,t2,t1,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+
+--echo # Outside table sandwiched between two FULL JOIN partners
+--echo # of the (t1, t2) nest, rejected.
+explain extended select /*+ join_order(t1,t4,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+--sorted_result
+select /*+ join_order(t1,t4,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+
+--echo # Outside table sandwiched between (t1, t2) and t3
+--echo # across the FULL JOIN, rejected.
+explain extended select /*+ join_order(t1,t2,t4,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+--sorted_result
+select /*+ join_order(t1,t2,t4,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+  on (t4.d=t3.c or t4.d=5);
+drop table t1, t2, t3, t4;
+
+--echo # JOIN_PREFIX and JOIN_SUFFIX hints around a FULL JOIN,
+--echo # with the FULL JOIN on the left side of the INNER JOIN
+--echo # (the configuration phase 2 supports).  JOIN_PREFIX forces
+--echo # the listed tables to lead the join order; JOIN_SUFFIX
+--echo # forces them to trail it.  Both must respect the FULL JOIN
+--echo # contiguity invariant.  A hint that ends up putting a
+--echo # non-FULL-JOIN table between two FULL JOIN tables, once the
+--echo # implicit prefix or suffix dependencies are added, is
+--echo # rejected.
+create table t1 (a int);
+insert into t1 values (2), (1), (7), (1), (2);
+create table t2 (b int);
+insert into t2 values (4), (5), (9), (4), (1), (7);
+create table t3 (c int);
+insert into t3 values (3), (1), (3), (9);
+
+--echo # JOIN_PREFIX with the outside table, honored (was rejected
+--echo # before the FULL JOIN check was relaxed).
+explain extended select /*+ join_prefix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+--sorted_result
+select /*+ join_prefix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+
+--echo # JOIN_PREFIX with the FULL JOIN pair, honored.
+explain extended select /*+ join_prefix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+--sorted_result
+select /*+ join_prefix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+
+--echo # JOIN_PREFIX naming one FULL JOIN partner and the outside
+--echo # table forces the other partner after both, splitting the
+--echo # FULL JOIN block, rejected.
+explain extended select /*+ join_prefix(t1, t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+--sorted_result
+select /*+ join_prefix(t1, t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+
+--echo # JOIN_SUFFIX with the outside table, honored.
+explain extended select /*+ join_suffix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+--sorted_result
+select /*+ join_suffix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+
+--echo # JOIN_SUFFIX with the FULL JOIN pair, honored (was
+--echo # rejected before the FULL JOIN check was relaxed).
+explain extended select /*+ join_suffix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+--sorted_result
+select /*+ join_suffix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+
+--echo # JOIN_SUFFIX naming the outside table and one FULL JOIN
+--echo # partner forces the other partner before both, splitting
+--echo # the FULL JOIN block, rejected.
+explain extended select /*+ join_suffix(t3, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+  on (t3.c=t1.a or t2.b=5);
+--sorted_result
+select /*+ join_suffix(t3, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
   on (t3.c=t1.a or t2.b=5);
 drop table t1, t2, t3;
 

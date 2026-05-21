@@ -2259,6 +2259,157 @@ NULL	NULL	18	18	no-match-t20	no-match-t20	NULL	NULL
 NULL	NULL	20	20	NULL	NULL	no-match-t21	no-match-t21
 NULL	NULL	20	20	match	match	match	match
 NULL	NULL	20	20	no-match-t20	no-match-t20	NULL	NULL
+# Join order under straight_join with FULL JOIN
+create table two (c int);
+insert into two values (1),(2);
+explain select * from two, (t10 full outer join t11 on t10.a=t11.a);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	two	ALL	NULL	NULL	NULL	NULL	2	
+1	SIMPLE	t10	ALL	NULL	NULL	NULL	NULL	10	
+1	SIMPLE	t11	ref	a	a	5	test.t10.a	1	Using where
+select * from two, (t10 full outer join t11 on t10.a=t11.a);
+c	a	b	a	b
+1	1	1	NULL	NULL
+1	10	10	10	10
+1	2	2	2	2
+1	3	3	NULL	NULL
+1	4	4	4	4
+1	5	5	NULL	NULL
+1	6	6	6	6
+1	7	7	NULL	NULL
+1	8	8	8	8
+1	9	9	NULL	NULL
+1	NULL	NULL	12	12
+1	NULL	NULL	14	14
+1	NULL	NULL	16	16
+1	NULL	NULL	18	18
+1	NULL	NULL	20	20
+2	1	1	NULL	NULL
+2	10	10	10	10
+2	2	2	2	2
+2	3	3	NULL	NULL
+2	4	4	4	4
+2	5	5	NULL	NULL
+2	6	6	6	6
+2	7	7	NULL	NULL
+2	8	8	8	8
+2	9	9	NULL	NULL
+2	NULL	NULL	12	12
+2	NULL	NULL	14	14
+2	NULL	NULL	16	16
+2	NULL	NULL	18	18
+2	NULL	NULL	20	20
+explain select * from (t10 full outer join t11 on t10.a=t11.a), two;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	two	ALL	NULL	NULL	NULL	NULL	2	
+1	SIMPLE	t10	ALL	NULL	NULL	NULL	NULL	10	
+1	SIMPLE	t11	ref	a	a	5	test.t10.a	1	Using where
+select * from (t10 full outer join t11 on t10.a=t11.a), two;
+a	b	a	b	c
+1	1	NULL	NULL	1
+1	1	NULL	NULL	2
+10	10	10	10	1
+10	10	10	10	2
+2	2	2	2	1
+2	2	2	2	2
+3	3	NULL	NULL	1
+3	3	NULL	NULL	2
+4	4	4	4	1
+4	4	4	4	2
+5	5	NULL	NULL	1
+5	5	NULL	NULL	2
+6	6	6	6	1
+6	6	6	6	2
+7	7	NULL	NULL	1
+7	7	NULL	NULL	2
+8	8	8	8	1
+8	8	8	8	2
+9	9	NULL	NULL	1
+9	9	NULL	NULL	2
+NULL	NULL	12	12	1
+NULL	NULL	12	12	2
+NULL	NULL	14	14	1
+NULL	NULL	14	14	2
+NULL	NULL	16	16	1
+NULL	NULL	16	16	2
+NULL	NULL	18	18	1
+NULL	NULL	18	18	2
+NULL	NULL	20	20	1
+NULL	NULL	20	20	2
+explain select straight_join * from two, (t10 full outer join t11 on t10.a=t11.a);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	two	ALL	NULL	NULL	NULL	NULL	2	
+1	SIMPLE	t10	ALL	NULL	NULL	NULL	NULL	10	
+1	SIMPLE	t11	ref	a	a	5	test.t10.a	1	Using where
+select straight_join * from two, (t10 full outer join t11 on t10.a=t11.a);
+c	a	b	a	b
+1	1	1	NULL	NULL
+1	10	10	10	10
+1	2	2	2	2
+1	3	3	NULL	NULL
+1	4	4	4	4
+1	5	5	NULL	NULL
+1	6	6	6	6
+1	7	7	NULL	NULL
+1	8	8	8	8
+1	9	9	NULL	NULL
+1	NULL	NULL	12	12
+1	NULL	NULL	14	14
+1	NULL	NULL	16	16
+1	NULL	NULL	18	18
+1	NULL	NULL	20	20
+2	1	1	NULL	NULL
+2	10	10	10	10
+2	2	2	2	2
+2	3	3	NULL	NULL
+2	4	4	4	4
+2	5	5	NULL	NULL
+2	6	6	6	6
+2	7	7	NULL	NULL
+2	8	8	8	8
+2	9	9	NULL	NULL
+2	NULL	NULL	12	12
+2	NULL	NULL	14	14
+2	NULL	NULL	16	16
+2	NULL	NULL	18	18
+2	NULL	NULL	20	20
+explain select straight_join * from (t10 full outer join t11 on t10.a=t11.a), two;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t10	ALL	NULL	NULL	NULL	NULL	10	
+1	SIMPLE	t11	ref	a	a	5	test.t10.a	1	Using where
+1	SIMPLE	two	ALL	NULL	NULL	NULL	NULL	2	Using join buffer (flat, BNL join)
+select straight_join * from (t10 full outer join t11 on t10.a=t11.a), two;
+a	b	a	b	c
+1	1	NULL	NULL	1
+1	1	NULL	NULL	2
+10	10	10	10	1
+10	10	10	10	2
+2	2	2	2	1
+2	2	2	2	2
+3	3	NULL	NULL	1
+3	3	NULL	NULL	2
+4	4	4	4	1
+4	4	4	4	2
+5	5	NULL	NULL	1
+5	5	NULL	NULL	2
+6	6	6	6	1
+6	6	6	6	2
+7	7	NULL	NULL	1
+7	7	NULL	NULL	2
+8	8	8	8	1
+8	8	8	8	2
+9	9	NULL	NULL	1
+9	9	NULL	NULL	2
+NULL	NULL	12	12	1
+NULL	NULL	12	12	2
+NULL	NULL	14	14	1
+NULL	NULL	14	14	2
+NULL	NULL	16	16	1
+NULL	NULL	16	16	2
+NULL	NULL	18	18	1
+NULL	NULL	18	18	2
+NULL	NULL	20	20	1
+NULL	NULL	20	20	2
 # FULL JOIN tables must be contiguous but no longer must appear
 # at the start of the join order.
 create table ten(a int primary key);
@@ -2472,7 +2623,7 @@ NULL	NULL	192	192
 NULL	NULL	193	193
 NULL	NULL	194	194
 NULL	NULL	195	195
-drop table t10, t11, t20, t21, ten, one_k, t1, t2;
+drop table t10, t11, t20, t21, two, ten, one_k, t1, t2;
 # ========================================================
 # Section 16: Storage engines (MyISAM, Aria, mixed)
 #
@@ -2953,6 +3104,266 @@ k	ltag	rtag
 3	L3	R3
 4	L4	R4
 5	NULL	R5
+# STRAIGHT_JOIN combined with FULL JOIN.  Each FULL JOIN pair
+# must stay contiguous in the join order so its null-complement
+# rescan can fire at the right partner with the LEFT JOIN pass
+# complete, but non FULL JOIN tables may appear before, after,
+# or between distinct FULL JOIN pairs.  STRAIGHT_JOIN cannot
+# violate per-pair contiguity because the SQL grammar puts each
+# pair's L and R syntactically adjacent in the FROM clause.
+# FULL JOIN tables first.
+explain
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L full join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t3L	ALL	NULL	NULL	NULL	NULL	4	
+1	SIMPLE	t3R	ALL	NULL	NULL	NULL	NULL	4	Using where
+1	SIMPLE	t3O	ALL	NULL	NULL	NULL	NULL	7	Using where; Using join buffer (flat, BNL join)
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L full join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4;
+k	x
+1	3
+1	4
+2	3
+2	4
+3	3
+3	4
+4	3
+4	4
+5	3
+5	4
+6	3
+6	4
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L left join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4
+union
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3L right join t3R on t3L.k = t3R.k, t3O
+where t3O.x between 3 and 4;
+k	x
+1	3
+1	4
+2	3
+2	4
+3	3
+3	4
+4	3
+4	4
+5	3
+5	4
+6	3
+6	4
+# Non FULL JOIN table first.
+explain
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L full join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t3O	ALL	NULL	NULL	NULL	NULL	7	Using where
+1	SIMPLE	t3L	ALL	NULL	NULL	NULL	NULL	4	
+1	SIMPLE	t3R	ALL	NULL	NULL	NULL	NULL	4	Using where
+select straight_join coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L full join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4;
+k	x
+1	3
+1	4
+2	3
+2	4
+3	3
+3	4
+4	3
+4	4
+5	3
+5	4
+6	3
+6	4
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L left join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4
+union
+select coalesce(t3L.k, t3R.k) as k, t3O.x
+from t3O, t3L right join t3R on t3L.k = t3R.k
+where t3O.x between 3 and 4;
+k	x
+1	3
+1	4
+2	3
+2	4
+3	3
+3	4
+4	3
+4	4
+5	3
+5	4
+6	3
+6	4
+# Two distinct FULL JOIN pairs with a non FULL JOIN table
+# between them, under STRAIGHT_JOIN.  Each pair is internally
+# contiguous so STRAIGHT_JOIN is honored and the result matches
+# the cross of the two pairs' LEFT/RIGHT UNION oracle.
+create table t3N (k int);
+insert into t3N values (1), (3), (5), (7);
+explain
+select straight_join
+coalesce(t3L.k, t3R.k) as kLR, t3O.x,
+coalesce(t3M.k, t3N.k) as kMN
+from (t3L full join t3R on t3L.k = t3R.k),
+t3O,
+(t3M full join t3N on t3M.k = t3N.k)
+where t3O.x between 3 and 4;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t3L	ALL	NULL	NULL	NULL	NULL	4	
+1	SIMPLE	t3R	ALL	NULL	NULL	NULL	NULL	4	Using where
+1	SIMPLE	t3O	ALL	NULL	NULL	NULL	NULL	7	Using where; Using join buffer (flat, BNL join)
+1	SIMPLE	t3M	ALL	NULL	NULL	NULL	NULL	3	
+1	SIMPLE	t3N	ALL	NULL	NULL	NULL	NULL	4	Using where
+select straight_join
+coalesce(t3L.k, t3R.k) as kLR, t3O.x,
+coalesce(t3M.k, t3N.k) as kMN
+from (t3L full join t3R on t3L.k = t3R.k),
+t3O,
+(t3M full join t3N on t3M.k = t3N.k)
+where t3O.x between 3 and 4;
+kLR	x	kMN
+1	3	1
+1	3	2
+1	3	3
+1	3	5
+1	3	7
+1	4	1
+1	4	2
+1	4	3
+1	4	5
+1	4	7
+2	3	1
+2	3	2
+2	3	3
+2	3	5
+2	3	7
+2	4	1
+2	4	2
+2	4	3
+2	4	5
+2	4	7
+3	3	1
+3	3	2
+3	3	3
+3	3	5
+3	3	7
+3	4	1
+3	4	2
+3	4	3
+3	4	5
+3	4	7
+4	3	1
+4	3	2
+4	3	3
+4	3	5
+4	3	7
+4	4	1
+4	4	2
+4	4	3
+4	4	5
+4	4	7
+5	3	1
+5	3	2
+5	3	3
+5	3	5
+5	3	7
+5	4	1
+5	4	2
+5	4	3
+5	4	5
+5	4	7
+6	3	1
+6	3	2
+6	3	3
+6	3	5
+6	3	7
+6	4	1
+6	4	2
+6	4	3
+6	4	5
+6	4	7
+select lr.kLR, t3O.x, mn.kMN
+from (select coalesce(t3L.k, t3R.k) as kLR
+from t3L left join t3R on t3L.k = t3R.k
+union
+select coalesce(t3L.k, t3R.k)
+from t3L right join t3R on t3L.k = t3R.k) lr,
+t3O,
+(select coalesce(t3M.k, t3N.k) as kMN
+from t3M left join t3N on t3M.k = t3N.k
+union
+select coalesce(t3M.k, t3N.k)
+from t3M right join t3N on t3M.k = t3N.k) mn
+where t3O.x between 3 and 4;
+kLR	x	kMN
+1	3	1
+1	3	2
+1	3	3
+1	3	5
+1	3	7
+1	4	1
+1	4	2
+1	4	3
+1	4	5
+1	4	7
+2	3	1
+2	3	2
+2	3	3
+2	3	5
+2	3	7
+2	4	1
+2	4	2
+2	4	3
+2	4	5
+2	4	7
+3	3	1
+3	3	2
+3	3	3
+3	3	5
+3	3	7
+3	4	1
+3	4	2
+3	4	3
+3	4	5
+3	4	7
+4	3	1
+4	3	2
+4	3	3
+4	3	5
+4	3	7
+4	4	1
+4	4	2
+4	4	3
+4	4	5
+4	4	7
+5	3	1
+5	3	2
+5	3	3
+5	3	5
+5	3	7
+5	4	1
+5	4	2
+5	4	3
+5	4	5
+5	4	7
+6	3	1
+6	3	2
+6	3	3
+6	3	5
+6	3	7
+6	4	1
+6	4	2
+6	4	3
+6	4	5
+6	4	7
+drop table t3N;
 drop table t3O, t3L, t3R, t3M;
 # ========================================================
 # Section 18: Regressions
@@ -3161,13 +3572,14 @@ NULL	NULL	4
 NULL	NULL	4
 NULL	NULL	9
 drop table t1, t2, t3;
-# FULL JOIN tables must be placed first in the join order because
-# the null complement pass only works in phase 2 when FULL JOIN
-# is "to the left" (outer) of other JOINs.  A JOIN_ORDER() hint
-# that forces a non-FULL JOIN table before the FULL JOIN tables
-# is illegal (expecting to relax this in phase 3).
-# Without the fix, this asserted in best_extension_by_limited_search
-# but now the hint's ignored for an invalid JOIN order (with a warning).
+# JOIN_ORDER hints around a FULL JOIN.  The partners of each
+# FULL JOIN must remain contiguous in the join order so the
+# null-complement pass can fire at the right partner with the
+# LEFT JOIN pass complete; outside tables may sit before or
+# after the pair.  A hint that names an outside table between
+# the two partners is rejected with a conflict warning; a hint
+# that names an outside table before (or after) the pair is
+# honored.
 create table t1 (a int);
 insert into t1 values (2), (1), (7), (1), (2);
 create table t2 (b int);
@@ -3175,13 +3587,15 @@ insert into t2 values (4), (5), (9), (4), (1), (7);
 create table t3 (c int);
 insert into t3 values (3), (1), (3), (9);
 # No hint, base case, should match other results.
-explain select *
+explain extended select *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
-id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	
-1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	
-1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	Using where
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+Warnings:
+Note	1003	select `test`.`t3`.`c` AS `c`,`test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t3` join (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) where `test`.`t1`.`a` = `test`.`t3`.`c` or `test`.`t2`.`b` = 5
 select *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
@@ -3192,34 +3606,16 @@ c	a	b
 3	NULL	5
 3	NULL	5
 9	NULL	5
-# "Trivial" hint, it matches the expected join order (is allowed)
-explain select /*+ join_order(t1,t2,t3) */ *
+# Outside table before the FULL JOIN pair, honored.
+explain extended select /*+ join_order(t3,t1,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
-id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	
-1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	Using where
-1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	Using where; Using join buffer (flat, BNL join)
-select /*+ join_order(t1,t2,t3) */ *
-from t3 inner join (t1 full join t2 on t1.a=t2.b)
-on (t3.c=t1.a or t2.b=5);
-c	a	b
-1	1	1
-1	1	1
-1	NULL	5
-3	NULL	5
-3	NULL	5
-9	NULL	5
-# JOIN_ORDER hint with combinations
-explain select /*+ join_order(t3,t1,t2) */ *
-from t3 inner join (t1 full join t2 on t1.a=t2.b)
-on (t3.c=t1.a or t2.b=5);
-id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	
-1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	
-1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	Using where
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
 Warnings:
-Warning	4219	Hint JOIN_ORDER(`t3`,`t1`,`t2`) is ignored as conflicting/duplicated
+Note	1003	select /*+ JOIN_ORDER(@`select#1` `t3`,`t1`,`t2`) */ `test`.`t3`.`c` AS `c`,`test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t3` join (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) where `test`.`t1`.`a` = `test`.`t3`.`c` or `test`.`t2`.`b` = 5
 select /*+ join_order(t3,t1,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
@@ -3230,17 +3626,37 @@ c	a	b
 3	NULL	5
 3	NULL	5
 9	NULL	5
-Warnings:
-Warning	4219	Hint JOIN_ORDER(`t3`,`t1`,`t2`) is ignored as conflicting/duplicated
-explain select /*+ join_order(t1,t3,t2) */ *
+# Outside table after the FULL JOIN pair, honored.
+explain extended select /*+ join_order(t1,t2,t3) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
-id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	
-1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	
-1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	Using where
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Note	1003	select /*+ JOIN_ORDER(@`select#1` `t1`,`t2`,`t3`) */ `test`.`t3`.`c` AS `c`,`test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t3` join (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) where `test`.`t3`.`c` = `test`.`t1`.`a` or `test`.`t2`.`b` = 5
+select /*+ join_order(t1,t2,t3) */ *
+from t3 inner join (t1 full join t2 on t1.a=t2.b)
+on (t3.c=t1.a or t2.b=5);
+c	a	b
+1	1	1
+1	1	1
+1	NULL	5
+3	NULL	5
+3	NULL	5
+9	NULL	5
+# Outside table between the two FULL JOIN partners, rejected.
+explain extended select /*+ join_order(t1,t3,t2) */ *
+from t3 inner join (t1 full join t2 on t1.a=t2.b)
+on (t3.c=t1.a or t2.b=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
 Warnings:
 Warning	4219	Hint JOIN_ORDER(`t1`,`t3`,`t2`) is ignored as conflicting/duplicated
+Note	1003	select `test`.`t3`.`c` AS `c`,`test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b` from `test`.`t3` join (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) where `test`.`t1`.`a` = `test`.`t3`.`c` or `test`.`t2`.`b` = 5
 select /*+ join_order(t1,t3,t2) */ *
 from t3 inner join (t1 full join t2 on t1.a=t2.b)
 on (t3.c=t1.a or t2.b=5);
@@ -3253,6 +3669,313 @@ c	a	b
 9	NULL	5
 Warnings:
 Warning	4219	Hint JOIN_ORDER(`t1`,`t3`,`t2`) is ignored as conflicting/duplicated
+drop table t1, t2, t3;
+# ((t1, t2) FULL JOIN t3) INNER JOIN t4 with the FULL JOIN on
+# the left side of the INNER JOIN, the configuration phase 2
+# supports.  The FULL JOIN block covers three tables; t4 sits
+# outside and may go before or after the block but never
+# between any two of t1, t2, t3.  The FULL JOIN ON
+# condition is a simple equi-join so the query translates
+# to PostgreSQL; the INNER JOIN ON is disjunctive so the
+# FULL JOIN is not eligible for the LEFT/RIGHT/INNER
+# rewrite and survives into the join optimizer.
+create table t1 (a int);
+insert into t1 values (1), (2);
+create table t2 (b int);
+insert into t2 values (3), (4);
+create table t3 (c int);
+insert into t3 values (1), (5);
+create table t4 (d int);
+insert into t4 values (1), (5);
+# No hint, base case.
+explain extended select *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c`,`test`.`t4`.`d` AS `d` from ((`test`.`t1` join `test`.`t2`) full join `test`.`t3` on(`test`.`t3`.`c` = `test`.`t1`.`a`)) join `test`.`t4` where `test`.`t4`.`d` = `test`.`t3`.`c` or `test`.`t4`.`d` = 5
+select *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+a	b	c	d
+1	3	1	1
+1	3	1	5
+1	4	1	1
+1	4	1	5
+2	3	NULL	5
+2	4	NULL	5
+NULL	NULL	5	5
+# Outside table before the FULL JOIN block, honored.
+explain extended select /*+ join_order(t4,t1,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+Warnings:
+Note	1003	select /*+ JOIN_ORDER(@`select#1` `t4`,`t1`,`t2`,`t3`) */ `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c`,`test`.`t4`.`d` AS `d` from ((`test`.`t1` join `test`.`t2`) full join `test`.`t3` on(`test`.`t3`.`c` = `test`.`t1`.`a`)) join `test`.`t4` where `test`.`t3`.`c` = `test`.`t4`.`d` or `test`.`t4`.`d` = 5
+select /*+ join_order(t4,t1,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+a	b	c	d
+1	3	1	1
+1	3	1	5
+1	4	1	1
+1	4	1	5
+2	3	NULL	5
+2	4	NULL	5
+NULL	NULL	5	5
+# Outside table after the FULL JOIN block, honored.
+explain extended select /*+ join_order(t1,t2,t3,t4) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Note	1003	select /*+ JOIN_ORDER(@`select#1` `t1`,`t2`,`t3`,`t4`) */ `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c`,`test`.`t4`.`d` AS `d` from ((`test`.`t1` join `test`.`t2`) full join `test`.`t3` on(`test`.`t3`.`c` = `test`.`t1`.`a`)) join `test`.`t4` where `test`.`t4`.`d` = `test`.`t3`.`c` or `test`.`t4`.`d` = 5
+select /*+ join_order(t1,t2,t3,t4) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+a	b	c	d
+1	3	1	1
+1	3	1	5
+1	4	1	1
+1	4	1	5
+2	3	NULL	5
+2	4	NULL	5
+NULL	NULL	5	5
+# Swap t1 and t2 within the (t1, t2) nest while keeping
+# the FULL JOIN block contiguous, honored.
+explain extended select /*+ join_order(t4,t2,t1,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+Warnings:
+Note	1003	select /*+ JOIN_ORDER(@`select#1` `t4`,`t2`,`t1`,`t3`) */ `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c`,`test`.`t4`.`d` AS `d` from ((`test`.`t1` join `test`.`t2`) full join `test`.`t3` on(`test`.`t3`.`c` = `test`.`t1`.`a`)) join `test`.`t4` where `test`.`t3`.`c` = `test`.`t4`.`d` or `test`.`t4`.`d` = 5
+select /*+ join_order(t4,t2,t1,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+a	b	c	d
+1	3	1	1
+1	3	1	5
+1	4	1	1
+1	4	1	5
+2	3	NULL	5
+2	4	NULL	5
+NULL	NULL	5	5
+# Outside table sandwiched between two FULL JOIN partners
+# of the (t1, t2) nest, rejected.
+explain extended select /*+ join_order(t1,t4,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Warning	4219	Hint JOIN_ORDER(`t1`,`t4`,`t2`,`t3`) is ignored as conflicting/duplicated
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c`,`test`.`t4`.`d` AS `d` from ((`test`.`t1` join `test`.`t2`) full join `test`.`t3` on(`test`.`t3`.`c` = `test`.`t1`.`a`)) join `test`.`t4` where `test`.`t4`.`d` = `test`.`t3`.`c` or `test`.`t4`.`d` = 5
+select /*+ join_order(t1,t4,t2,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+a	b	c	d
+1	3	1	1
+1	3	1	5
+1	4	1	1
+1	4	1	5
+2	3	NULL	5
+2	4	NULL	5
+NULL	NULL	5	5
+Warnings:
+Warning	4219	Hint JOIN_ORDER(`t1`,`t4`,`t2`,`t3`) is ignored as conflicting/duplicated
+# Outside table sandwiched between (t1, t2) and t3
+# across the FULL JOIN, rejected.
+explain extended select /*+ join_order(t1,t2,t4,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	2	100.00	
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where
+1	SIMPLE	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Warning	4219	Hint JOIN_ORDER(`t1`,`t2`,`t4`,`t3`) is ignored as conflicting/duplicated
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c`,`test`.`t4`.`d` AS `d` from ((`test`.`t1` join `test`.`t2`) full join `test`.`t3` on(`test`.`t3`.`c` = `test`.`t1`.`a`)) join `test`.`t4` where `test`.`t4`.`d` = `test`.`t3`.`c` or `test`.`t4`.`d` = 5
+select /*+ join_order(t1,t2,t4,t3) */ *
+from ((t1, t2) full join t3 on t3.c=t1.a) inner join t4
+on (t4.d=t3.c or t4.d=5);
+a	b	c	d
+1	3	1	1
+1	3	1	5
+1	4	1	1
+1	4	1	5
+2	3	NULL	5
+2	4	NULL	5
+NULL	NULL	5	5
+Warnings:
+Warning	4219	Hint JOIN_ORDER(`t1`,`t2`,`t4`,`t3`) is ignored as conflicting/duplicated
+drop table t1, t2, t3, t4;
+# JOIN_PREFIX and JOIN_SUFFIX hints around a FULL JOIN,
+# with the FULL JOIN on the left side of the INNER JOIN
+# (the configuration phase 2 supports).  JOIN_PREFIX forces
+# the listed tables to lead the join order; JOIN_SUFFIX
+# forces them to trail it.  Both must respect the FULL JOIN
+# contiguity invariant.  A hint that ends up putting a
+# non-FULL-JOIN table between two FULL JOIN tables, once the
+# implicit prefix or suffix dependencies are added, is
+# rejected.
+create table t1 (a int);
+insert into t1 values (2), (1), (7), (1), (2);
+create table t2 (b int);
+insert into t2 values (4), (5), (9), (4), (1), (7);
+create table t3 (c int);
+insert into t3 values (3), (1), (3), (9);
+# JOIN_PREFIX with the outside table, honored (was rejected
+# before the FULL JOIN check was relaxed).
+explain extended select /*+ join_prefix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+Warnings:
+Note	1003	select /*+ JOIN_PREFIX(@`select#1` `t3`) */ `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c` from (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) join `test`.`t3` where `test`.`t1`.`a` = `test`.`t3`.`c` or `test`.`t2`.`b` = 5
+select /*+ join_prefix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+a	b	c
+1	1	1
+1	1	1
+NULL	5	1
+NULL	5	3
+NULL	5	3
+NULL	5	9
+# JOIN_PREFIX with the FULL JOIN pair, honored.
+explain extended select /*+ join_prefix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Note	1003	select /*+ JOIN_PREFIX(@`select#1` `t1`,`t2`) */ `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c` from (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) join `test`.`t3` where `test`.`t3`.`c` = `test`.`t1`.`a` or `test`.`t2`.`b` = 5
+select /*+ join_prefix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+a	b	c
+1	1	1
+1	1	1
+NULL	5	1
+NULL	5	3
+NULL	5	3
+NULL	5	9
+# JOIN_PREFIX naming one FULL JOIN partner and the outside
+# table forces the other partner after both, splitting the
+# FULL JOIN block, rejected.
+explain extended select /*+ join_prefix(t1, t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+Warnings:
+Warning	4219	Hint JOIN_PREFIX(`t1`,`t3`) is ignored as conflicting/duplicated
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c` from (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) join `test`.`t3` where `test`.`t1`.`a` = `test`.`t3`.`c` or `test`.`t2`.`b` = 5
+select /*+ join_prefix(t1, t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+a	b	c
+1	1	1
+1	1	1
+NULL	5	1
+NULL	5	3
+NULL	5	3
+NULL	5	9
+Warnings:
+Warning	4219	Hint JOIN_PREFIX(`t1`,`t3`) is ignored as conflicting/duplicated
+# JOIN_SUFFIX with the outside table, honored.
+explain extended select /*+ join_suffix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	Using where; Using join buffer (flat, BNL join)
+Warnings:
+Note	1003	select /*+ JOIN_SUFFIX(@`select#1` `t3`) */ `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c` from (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) join `test`.`t3` where `test`.`t3`.`c` = `test`.`t1`.`a` or `test`.`t2`.`b` = 5
+select /*+ join_suffix(t3) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+a	b	c
+1	1	1
+1	1	1
+NULL	5	1
+NULL	5	3
+NULL	5	3
+NULL	5	9
+# JOIN_SUFFIX with the FULL JOIN pair, honored (was
+# rejected before the FULL JOIN check was relaxed).
+explain extended select /*+ join_suffix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+Warnings:
+Note	1003	select /*+ JOIN_SUFFIX(@`select#1` `t1`,`t2`) */ `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c` from (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) join `test`.`t3` where `test`.`t1`.`a` = `test`.`t3`.`c` or `test`.`t2`.`b` = 5
+select /*+ join_suffix(t1, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+a	b	c
+1	1	1
+1	1	1
+NULL	5	1
+NULL	5	3
+NULL	5	3
+NULL	5	9
+# JOIN_SUFFIX naming the outside table and one FULL JOIN
+# partner forces the other partner before both, splitting
+# the FULL JOIN block, rejected.
+explain extended select /*+ join_suffix(t3, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t3	ALL	NULL	NULL	NULL	NULL	4	100.00	
+1	SIMPLE	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+1	SIMPLE	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using where
+Warnings:
+Warning	4219	Hint JOIN_SUFFIX(`t3`,`t2`) is ignored as conflicting/duplicated
+Note	1003	select `test`.`t1`.`a` AS `a`,`test`.`t2`.`b` AS `b`,`test`.`t3`.`c` AS `c` from (`test`.`t1` full join `test`.`t2` on(`test`.`t1`.`a` = `test`.`t2`.`b`)) join `test`.`t3` where `test`.`t1`.`a` = `test`.`t3`.`c` or `test`.`t2`.`b` = 5
+select /*+ join_suffix(t3, t2) */ *
+from (t1 full join t2 on t1.a=t2.b) inner join t3
+on (t3.c=t1.a or t2.b=5);
+a	b	c
+1	1	1
+1	1	1
+NULL	5	1
+NULL	5	3
+NULL	5	3
+NULL	5	9
+Warnings:
+Warning	4219	Hint JOIN_SUFFIX(`t3`,`t2`) is ignored as conflicting/duplicated
 drop table t1, t2, t3;
 # Empty MyISAM FULL JOIN partner.  MyISAM reports an exact 0 row
 # count, so the table used to be promoted to a JT_SYSTEM const
