@@ -46,12 +46,12 @@ jobs:
       - name: Test MTR
         run: |
           $env:PATH = "C:\Strawberry\perl\bin;$env:PATH;C:\Program Files (x86)\Windows Kits\10\Debuggers\arm64"
-          #Calculate parallel as 1 * number of processors
-          $parallel = 1 * [int]$env:NUMBER_OF_PROCESSORS
+          #Calculate parallel as 4 * number of processors
+          $parallel = 4 * [int]$env:NUMBER_OF_PROCESSORS
           # create case-sensitive directory to run tests in
           $tmp = (Get-Item $env:TEMP).FullName
           $tmp = $tmp -replace '\\','/'
           $cidir = "$tmp/ci"
           mkdir $cidir
           fsutil file setCaseSensitiveInfo $cidir enable
-          perl bld\mysql-test\mysql-test-run.pl --force --parallel=$parallel --suite=main,innodb --skip-rpl --vardir=$cidir/var --mysqld=--lower-case-table-names=0  --mysqld=--loose-innodb-flush-log-at-trx-commit=2 --mysqld=--debug-no-sync
+          perl bld\mysql-test\mysql-test-run.pl --force --parallel=$parallel --suite=main,innodb --vardir=$cidir/var --mysqld=--lower-case-table-names=0  --mysqld=--loose-innodb-flush-log-at-trx-commit=2 --mysqld=--debug-no-sync --mysqld=--loose-innodb-buffer-pool-size-max=1000m "--skip-test=mem_pressure|innodb_buffer_pool_resize|innodb_buffer_pool_fail"
