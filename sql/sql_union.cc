@@ -2425,7 +2425,7 @@ bool st_select_lex_unit::exec_inner()
           }
 	  table->no_keyread=1;
 	}
-	if (likely(!saved_error))
+	if (thd->killed != ABORT_QUERY && likely(!saved_error))
 	{
 	  if (union_result->flush())
 	  {
@@ -2434,7 +2434,7 @@ bool st_select_lex_unit::exec_inner()
 	  }
 	}
       }
-      if (unlikely(saved_error))
+      if (thd->killed != ABORT_QUERY && unlikely(saved_error))
       {
         error= saved_error;
         goto err;
