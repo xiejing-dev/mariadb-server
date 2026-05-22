@@ -5111,7 +5111,11 @@ part_type_def:
 	    Select->parsing_place= NO_MATTER;
 	  }
         | LIST_SYM part_column_list
-          { Lex->part_info->part_type= LIST_PARTITION; }
+          {
+            Lex->part_info->part_type= LIST_PARTITION;
+            if (Lex->part_info->int_type != INTERVAL_LAST)
+              my_yyabort_error((ER_PARTITION_INTERVAL_NOT_LIST, MYF(0)));
+          }
         | SYSTEM_TIME_SYM
           {
              if (unlikely(Lex->part_info->vers_init_info(thd)))
@@ -5179,14 +5183,29 @@ part_field_item:
         ;
 
 part_column_list:
-          COLUMNS '(' part_field_list ')'
+          COLUMNS '(' part_field_list ')' opt_part_interval
           {
             partition_info *part_info= Lex->part_info;
             part_info->column_list= TRUE;
             part_info->list_of_part_fields= TRUE;
+            if (part_info->int_type != INTERVAL_LAST &&
+                part_info->num_columns > 1)
+              my_yyabort_error((ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, MYF(0),
+                                "range interval partition fields"));
           }
         ;
 
+opt_part_interval:
+          /* empty */ {}
+        | INTERVAL_SYM expr interval opt_auto
+          {
+           partition_info *part_info= Lex->part_info;
+           const char *table_name=
+             Lex->create_last_non_select_table->table_name.str;
+           if (unlikely(part_info->set_interval(thd, $2, $3, table_name)))
+             MYSQL_YYABORT;
+          }
+        ;
 
 part_func:
           '(' part_func_expr ')'
@@ -5722,7 +5741,7 @@ opt_versioning_rotation:
          {
            partition_info *part_info= Lex->part_info;
            const char *table_name= Lex->create_last_non_select_table->table_name.str;
-           if (unlikely(part_info->vers_set_interval(thd, $3, $4, $5, $6,
+           if (unlikely(part_info->vers_set_interval(thd, $3 /*expr*/, $4, $5, $6,
                                                      table_name)))
              MYSQL_YYABORT;
          }
@@ -5757,6 +5776,12 @@ opt_vers_auto_part:
            $$= 1;
          }
        ;
+
+opt_auto:
+          /* empty */ {}
+        | AUTO_SYM {}
+        ;
+
 /*
  End of partition parser part
 */

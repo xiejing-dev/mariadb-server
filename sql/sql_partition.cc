@@ -1248,6 +1248,98 @@ int partition_info_compare_column_values(const void *first_arg,
   return 0;
 }
 
+static bool check_range_interval_constants(THD *thd, partition_info *part_info)
+{
+  /* Range interval is only supported in RANGE COLUMNS with one column */
+  DBUG_ASSERT(part_info->column_list);
+  DBUG_ASSERT(part_info->part_field_list.elements == 1);
+  List_iterator<partition_element> part_it(part_info->partitions);
+  partition_element *el;
+  uint tmp, part_id= 0;
+  /* Find the first partition to auto-add */
+  while ((el= part_it++) && el->part_state == PART_NORMAL)
+  {
+    part_id++;
+  }
+  /* No partition to auto-add. Could be CREATE TABLE */
+  if (!el)
+    return FALSE;
+  /*
+    We are in a DML where partitions need to be created. There
+    should already be some existing partitions
+  */
+  DBUG_ASSERT(part_id != 0);
+  longlong packed= part_info->partitions.elem(part_id - 1)->get_col_val(0).item_expression->val_datetime_packed(thd);
+  MYSQL_TIME ltime;
+  unpack_time(packed, &ltime, MYSQL_TIMESTAMP_DATETIME);
+  do
+  {
+    if (date_add_interval(thd, &ltime, part_info->int_type, part_info->interval))
+    {
+      my_error(ER_DATA_OUT_OF_RANGE, MYF(0), "DATETIME", "INTERVAL");
+      return 1;
+    }
+    Datetime dt(thd, (int *)&tmp, &ltime, Datetime::Options(thd), 0);
+    Date d(static_cast<const Temporal_with_date *>(&dt));
+    Item *column_item;
+    switch (part_info->part_field_array[0]->type())
+    {
+    case MYSQL_TYPE_DATE:
+      column_item= new (thd->mem_root) Item_date_literal(thd, &d);
+      break;
+    case MYSQL_TYPE_DATETIME:
+      column_item= new (thd->mem_root) Item_datetime_literal(thd, &dt, 0);
+      break;
+    default:
+      /* Only DATE and DATETIME are allowed */
+      DBUG_ASSERT(0);
+      return TRUE;
+    }
+    p_elem_val *range_val= new p_elem_val;
+    el->list_val_list.push_back(range_val);
+    part_column_list_val *col_val= new part_column_list_val;
+    range_val->col_val_array= col_val;
+    col_val->item_expression= column_item;
+    col_val->max_value= false;
+    col_val->null_value= false;
+
+    /*
+      Similar to partition_info::fix_column_value_functions, but with a
+      hack on field->table->write_set to pass the assertion of
+      marked_for_write_or_computed() in
+      Field_date_common::store_TIME_with_warning
+    */
+    Field *field= part_info->part_field_array[0];
+    col_val->part_info= part_info;
+    col_val->partition_id= part_id;
+    col_val->column_value= NULL;
+    uchar *val_ptr;
+    uint len= field->pack_length();
+
+    Sql_mode_instant_set sms(thd, 0);
+    /* TODO(MDEV-15621): remove this HACK */
+    MY_BITMAP *save_write_set= field->table->write_set;
+    field->table->write_set= NULL;
+    bool save_got_warning= thd->got_warning;
+    thd->got_warning= 0;
+    /* HACK: only fail if error */
+    if (column_item->save_in_field(field, TRUE) && thd->is_error())
+    {
+      my_error(ER_WRONG_TYPE_COLUMN_VALUE_ERROR, MYF(0));
+      return TRUE;
+    }
+    thd->got_warning= save_got_warning;
+    field->table->write_set= save_write_set;
+    if (!(val_ptr= (uchar*) thd->memdup(field->ptr, len)))
+    {
+      return TRUE;
+    }
+    col_val->column_value= val_ptr;
+    col_val->fixed= TRUE;
+    part_id++;
+  } while ((el= part_it++));
+  return FALSE;
+}
 
 /*
   This routine allocates an array for all range constants to achieve a fast
@@ -1281,6 +1373,9 @@ static bool check_range_constants(THD *thd, partition_info *part_info)
   DBUG_PRINT("enter", ("RANGE with %d parts, column_list = %u",
                        part_info->num_parts, part_info->column_list));
 
+  if (part_info->is_range_interval())
+    if (check_range_interval_constants(thd, part_info))
+      goto end;
   if (part_info->column_list)
   {
     part_column_list_val *loc_range_col_array;
@@ -2324,6 +2419,32 @@ static int add_column_list_values(String *str, partition_info *part_info,
             return 1;
           }
           th= sql_field->type_handler();
+          enum_field_types ftype= th->real_field_type();
+          /*
+            Only allow DATETIME and DATE, since TIMESTAMP and YEAR
+            are already not allowed in range column partitioning
+          */
+          if (part_info->is_range_interval())
+          {
+            if (ftype != MYSQL_TYPE_DATETIME2 && ftype != MYSQL_TYPE_NEWDATE)
+            {
+              th->partition_field_type_not_allowed(sql_field->field_name);
+              return 1;
+            }
+            if (ftype == MYSQL_TYPE_NEWDATE)
+            {
+              MYSQL_TIME t1= {1, 1, 1, 0, 0, 0, 0, 0, MYSQL_TIMESTAMP_DATE},
+                         t2= t1;
+              t1.day++;
+              date_add_interval(current_thd, &t2, part_info->int_type,
+                                part_info->interval);
+              if (pack_time(&t1) > pack_time(&t2))
+              {
+                my_error(ER_PARTITION_INTERVAL_FINER_THAN_DATE, MYF(0));
+                return 1;
+              }
+            }
+          }
           if (th->partition_field_check(sql_field->field_name, item_expr))
             return 1;
           field_cs= sql_field->explicit_or_derived_charset(&derived_attr);
@@ -2672,6 +2793,13 @@ char *generate_partition_syntax(THD *thd, partition_info *part_info,
     err+= str.append('(');
     part_info->part_expr->print_for_table_def(&str);
     err+= str.append(')');
+  }
+  else if (part_info->is_range_interval())
+  {
+    err+= str.append(STRING_WITH_LEN(" COLUMNS"));
+    err+= add_part_field_list(thd, &str, part_info->part_field_list);
+    err+= str.append(STRING_WITH_LEN("INTERVAL "));
+    err+= append_interval(&str, part_info->int_type, part_info->interval);
   }
   else if (part_info->column_list)
   {
@@ -5251,7 +5379,8 @@ uint prep_alter_part_table(THD *thd, TABLE *table, Alter_info *alter_info,
       */
       if (thd->lex->no_write_to_binlog &&
           tab_part_info->part_type != HASH_PARTITION &&
-          tab_part_info->part_type != VERSIONING_PARTITION)
+          tab_part_info->part_type != VERSIONING_PARTITION &&
+          !tab_part_info->is_range_interval())
       {
         my_error(ER_NO_BINLOG_ERROR, MYF(0));
         goto err;

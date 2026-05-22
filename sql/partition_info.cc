@@ -400,7 +400,7 @@ bool partition_info::set_up_default_partitions(THD *thd, handler *file,
       num_parts= 2;
     use_default_num_partitions= false;
   }
-  else if (part_type != HASH_PARTITION)
+  else if (part_type != HASH_PARTITION && !is_range_interval())
   {
     const char *error_string;
     if (part_type == RANGE_PARTITION)
@@ -891,6 +891,31 @@ bool partition_info::vers_set_hist_part(THD *thd, uint *create_count)
   return false;
 }
 
+/* Determine the number of range interval partitions to create. */
+bool partition_info::range_interval_set_count(THD* thd, uint *create_count)
+{
+  partition_element *el= partitions.elem(partitions.elements - 1);
+  Item *item= el->get_col_val(0).item_expression;
+  MYSQL_TIME cur_time, end_time;
+  my_tz_SYSTEM->gmt_sec_to_TIME(&end_time, thd->query_start());
+  longlong cur= item->val_datetime_packed(thd);
+  unpack_time(cur, &cur_time, MYSQL_TIMESTAMP_DATETIME);
+  longlong end= pack_time(&end_time);
+  *create_count= 0;
+  while (cur <= end)
+  {
+    if (date_add_interval(thd, &cur_time, int_type, interval))
+      return true;
+    cur= pack_time(&cur_time);
+    ++*create_count;
+    if (*create_count == MAX_PARTITIONS - partitions.elements + 1)
+    {
+      my_error(ER_TOO_MANY_PARTITIONS_ERROR, MYF(ME_WARNING));
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
   @brief Run fast_alter_partition_table() to add new history partitions
@@ -1014,6 +1039,97 @@ exit:
   return result;
 }
 
+/*
+  similar to vers_create_partitions, create range interval partitions
+*/
+bool range_interval_create_partitions(THD* thd, TABLE_LIST* tl, uint num_parts)
+{
+  bool result= true;
+  Table_specification_st create_info;
+  Alter_info alter_info;
+  TABLE *table= tl->table;
+
+  DBUG_ASSERT(!thd->is_error());
+  DBUG_ASSERT(num_parts);
+
+  {
+    alter_info.reset();
+    alter_info.partition_flags= ALTER_PARTITION_ADD;
+    create_info.init();
+    create_info.alter_info= &alter_info;
+    Alter_table_ctx alter_ctx(thd, tl, 1, &table->s->db, &table->s->table_name);
+
+    MDL_REQUEST_INIT(&tl->mdl_request, MDL_key::TABLE, tl->db.str,
+                    tl->table_name.str, MDL_SHARED_NO_WRITE, MDL_TRANSACTION);
+    if (thd->mdl_context.acquire_lock(&tl->mdl_request,
+                                      thd->variables.lock_wait_timeout))
+      goto exit;
+    table->mdl_ticket= tl->mdl_request.ticket;
+
+    create_info.db_type= table->s->db_type();
+    DBUG_ASSERT(create_info.db_type);
+
+    partition_info *part_info= new partition_info();
+    if (unlikely(!part_info))
+    {
+      my_error(ER_OUT_OF_RESOURCES, MYF(0));
+      goto exit;
+    }
+    part_info->use_default_num_partitions= false;
+    part_info->use_default_num_subpartitions= false;
+    part_info->num_parts= num_parts;
+    part_info->num_subparts= table->part_info->num_subparts;
+    part_info->subpart_type= table->part_info->subpart_type;
+    part_info->num_columns= table->part_info->num_columns;
+    part_info->part_type= RANGE_PARTITION;
+    /* for partition_info::fix_parser_data to exit early */
+    part_info->int_type= table->part_info->int_type;
+
+    thd->work_part_info= part_info;
+    bool partition_changed= false;
+    bool fast_alter_partition= false;
+    if (prep_alter_part_table(thd, table, &alter_info, &create_info,
+                              &partition_changed, &fast_alter_partition))
+    {
+      my_error(ER_INTERNAL_ERROR, MYF(ME_WARNING),
+               tl->db.str, tl->table_name.str);
+      goto exit;
+    }
+    if (!fast_alter_partition)
+    {
+      my_error(ER_INTERNAL_ERROR, MYF(ME_WARNING),
+               tl->db.str, tl->table_name.str);
+      goto exit;
+    }
+    DBUG_ASSERT(partition_changed);
+    if (mysql_prepare_alter_table(thd, table, &create_info, &alter_info,
+                                  &alter_ctx))
+    {
+      my_error(ER_INTERNAL_ERROR, MYF(ME_WARNING),
+               tl->db.str, tl->table_name.str);
+      goto exit;
+    }
+
+    alter_info.db= alter_ctx.db;
+    alter_info.table_name= alter_ctx.table_name;
+    if (fast_alter_partition_table(thd, table, &alter_info, &alter_ctx,
+                                   &create_info, tl))
+    {
+      my_error(ER_INTERNAL_ERROR, MYF(ME_WARNING),
+               tl->db.str, tl->table_name.str);
+      goto exit;
+    }
+  }
+
+  result= false;
+  // NOTE: we have to return DA_EMPTY for new command
+  DBUG_ASSERT(thd->get_stmt_da()->is_ok());
+  thd->get_stmt_da()->reset_diagnostics_area();
+  thd->variables.option_bits|= OPTION_BINLOG_THIS;
+
+exit:
+  return result;
+}
 
 /**
   Warn at the end of DML command if the last history partition is out of LIMIT.
@@ -2325,6 +2441,7 @@ bool partition_info::fix_parser_data(THD *thd)
   partition_element *part_elem;
   uint num_elements;
   uint i= 0, j, k;
+  int sql_command= thd_sql_command(thd);
   DBUG_ENTER("partition_info::fix_parser_data");
 
   if (!(part_type == RANGE_PARTITION ||
@@ -2339,11 +2456,23 @@ bool partition_info::fix_parser_data(THD *thd)
         DBUG_RETURN(true);
       }
       /* If not set, use DEFAULT = 2 for CREATE and ALTER! */
-      if ((thd_sql_command(thd) == SQLCOM_CREATE_TABLE ||
-           thd_sql_command(thd) == SQLCOM_ALTER_TABLE) &&
+      if ((sql_command == SQLCOM_CREATE_TABLE ||
+           sql_command == SQLCOM_ALTER_TABLE) &&
           key_algorithm == KEY_ALGORITHM_NONE)
         key_algorithm= KEY_ALGORITHM_55;
     }
+    DBUG_RETURN(FALSE);
+  }
+  /*
+    TODO(MDEV-15621): we exit here for range interval partitions
+    because if this is called from prep_alter_part_table then
+    partition data is not calculated (in
+    check_range_interval_constants) yet. But maybe we shouldn't exit
+    here in user CREATE/ALTER TABLE statements for other checks.
+  */
+  if (sql_command != SQLCOM_CREATE_TABLE &&
+      sql_command != SQLCOM_ALTER_TABLE && is_range_interval())
+  {
     DBUG_RETURN(FALSE);
   }
   if (is_sub_partitioned() && list_of_subpart_fields)
@@ -2790,6 +2919,18 @@ bool partition_info::vers_init_info(THD * thd)
   return false;
 }
 
+bool partition_info::set_interval(THD* thd, Item* ival, interval_type type,
+                                  const char *table_name)
+{
+  bool error= get_interval_value(thd, ival, type, &interval);
+  if (error)
+  {
+    my_error(ER_PART_WRONG_VALUE, MYF(0), table_name, "INTERVAL");
+    return true;
+  }
+  int_type= type;
+  return error;
+}
 
 /**
   Assign INTERVAL and STARTS for SYSTEM_TIME partitions.
